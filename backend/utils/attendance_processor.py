@@ -344,4 +344,3 @@ def load_attendance_logs_excel(file_path):
     for row in sheet.rows:
         marquee_raw.append([cell.value for cell in row])
     return marquee_raw
-

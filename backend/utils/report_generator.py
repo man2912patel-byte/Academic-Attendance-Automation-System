@@ -8,7 +8,7 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
-from app.utils.db_helpers import get_db_connection
+from utils.db_helpers import get_db_connection
 
 class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
@@ -264,7 +264,6 @@ def build_matrix_report_pdf(username, title_text, runs):
     conn.close()
 
     buffer = io.BytesIO()
-    # Landscape orientation is better for matrix grids
     doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), rightMargin=36, leftMargin=36, topMargin=54, bottomMargin=54)
     
     styles = getSampleStyleSheet()
@@ -302,13 +301,10 @@ def build_matrix_report_pdf(username, title_text, runs):
 
     story = []
     
-    # Add title
     story.append(Paragraph(title_text, title_style))
     story.append(Spacer(1, 10))
     
-    # Define PDF Columns width: Roll(50), Name(100)
-    # Remaining landscape space is ~642pt. Let's distribute.
-    headers = ["Roll No", "Student Name"] + [d.slice(5) if hasattr(d, 'slice') else d[5:] for d in dates] + ["Pres", "%"]
+    headers = ["Roll No", "Student Name"] + [d[5:] for d in dates] + ["Pres", "%"]
     
     col_widths = [55, 110]
     date_col_width = max(18, min(40, 420 / max(1, len(dates))))
@@ -319,14 +315,13 @@ def build_matrix_report_pdf(username, title_text, runs):
     
     table_data = [[Paragraph(h, th_style) for h in headers]]
     
-    # Rows
     for s in students:
         roll = s["roll_number"]
         name = s["student_name"]
         
         row = [
             Paragraph(roll, td_left_style),
-            Paragraph(name[:20], td_left_style) # truncate long names
+            Paragraph(name[:20], td_left_style)
         ]
         
         present_count = 0
@@ -360,7 +355,6 @@ def build_matrix_report_pdf(username, title_text, runs):
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
     ]
     
-    # Apply cell highlight fills (P -> green, A -> red)
     for row_idx in range(1, len(table_data)):
         for col_idx in range(2, len(col_widths) - 2):
             cell_para = table_data[row_idx][col_idx]

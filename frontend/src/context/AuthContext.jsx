@@ -8,18 +8,31 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const initializeAuth = () => {
+    const initializeAuth = async () => {
       const activeUsername = localStorage.getItem('currentUser') || sessionStorage.getItem('currentUser');
-      if (activeUsername) {
-        const users = JSON.parse(localStorage.getItem('users')) || [];
-        const found = users.find(u => u.username.toLowerCase() === activeUsername.toLowerCase());
-        if (found) {
-          setUser(found);
-          // Set in localStorage to sync X-User-Username header
-          localStorage.setItem('currentUser', found.username);
-        } else {
-          localStorage.removeItem('currentUser');
-          sessionStorage.removeItem('currentUser');
+      const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+      
+      if (activeUsername && token) {
+        try {
+          // Verify token and fetch fresh settings from database
+          const res = await apiClient.get('/settings');
+          const savedUser = JSON.parse(localStorage.getItem('authUser') || '{}');
+          
+          setUser({
+            ...savedUser,
+            username: activeUsername,
+            student_excel_path: res.data.student_excel_path,
+            attendance_excel_path: res.data.attendance_excel_path,
+            theme: res.data.theme,
+            dark_mode: res.data.dark_mode,
+            output_folder: res.data.output_folder,
+            backup_folder: res.data.backup_folder,
+            export_format: res.data.export_format,
+            auto_backup: res.data.auto_backup
+          });
+        } catch (err) {
+          console.error("Token verification failed on start:", err);
+          logout();
         }
       }
       setLoading(false);
@@ -28,133 +41,108 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const login = async (username, password, rememberMe = false) => {
-    const users = JSON.parse(localStorage.getItem('users')) || [];
-    const found = users.find(u => u.username.toLowerCase() === username.toLowerCase() && u.password === password);
-    
-    if (!found) {
-      throw { response: { data: { message: "Invalid Username or Password" } } };
-    }
+    try {
+      const res = await apiClient.post('/login', { username, password });
+      const { user: userData, token } = res.data;
 
-    if (rememberMe) {
-      localStorage.setItem('currentUser', found.username);
-    } else {
-      sessionStorage.setItem('currentUser', found.username);
-      localStorage.setItem('currentUser', found.username); // Also set in local to trigger X-User-Username header
-    }
+      if (rememberMe) {
+        localStorage.setItem('authToken', token);
+        localStorage.setItem('currentUser', userData.username);
+        localStorage.setItem('authUser', JSON.stringify(userData));
+      } else {
+        sessionStorage.setItem('authToken', token);
+        sessionStorage.setItem('currentUser', userData.username);
+        localStorage.setItem('currentUser', userData.username); // Sync headers for API client
+        localStorage.setItem('authUser', JSON.stringify(userData));
+      }
 
-    setUser(found);
-    return found;
+      setUser(userData);
+      return userData;
+    } catch (err) {
+      throw err;
+    }
   };
 
   const register = async (name, email, username, password, securityQuestion, securityAnswer) => {
-    const users = JSON.parse(localStorage.getItem('users')) || [];
-    const exists = users.some(u => u.username.toLowerCase() === username.toLowerCase());
-    
-    if (exists) {
-      throw { response: { data: { message: "Username already exists" } } };
+    try {
+      const res = await apiClient.post('/register', {
+        name,
+        email,
+        username,
+        password,
+        securityQuestion,
+        securityAnswer
+      });
+      return res.data.user;
+    } catch (err) {
+      throw err;
     }
-
-    const newUser = {
-      id: Date.now(),
-      username: username.trim(),
-      name: name.trim(),
-      fullName: name.trim(),
-      email: email.trim(),
-      password: password,
-      securityQuestion: securityQuestion,
-      securityAnswer: securityAnswer,
-      profile_photo: null
-    };
-
-    users.push(newUser);
-    localStorage.setItem('users', JSON.stringify(users));
-    return newUser;
   };
 
   const forgotPassword = async (username, securityQuestion, securityAnswer, newPassword) => {
-    const users = JSON.parse(localStorage.getItem('users')) || [];
-    const userIndex = users.findIndex(u => u.username.toLowerCase() === username.toLowerCase());
-    
-    if (userIndex === -1) {
-      throw { response: { data: { message: "Username not found" } } };
-    }
-
-    const targetUser = users[userIndex];
-    if (
-      targetUser.securityQuestion !== securityQuestion ||
-      targetUser.securityAnswer.toLowerCase().trim() !== securityAnswer.toLowerCase().trim()
-    ) {
-      throw { response: { data: { message: "Incorrect security credentials" } } };
-    }
-
-    targetUser.password = newPassword;
-    users[userIndex] = targetUser;
-    localStorage.setItem('users', JSON.stringify(users));
-    
-    // If active user, update state
-    if (user && user.username.toLowerCase() === username.toLowerCase()) {
-      setUser(targetUser);
+    try {
+      await apiClient.post('/forgot-password', {
+        username,
+        securityQuestion,
+        securityAnswer,
+        newPassword
+      });
+    } catch (err) {
+      throw err;
     }
   };
 
   const editProfile = async (name, email, profilePhoto) => {
-    if (!user) throw { response: { data: { message: "Not authenticated" } } };
-
-    const users = JSON.parse(localStorage.getItem('users')) || [];
-    const userIndex = users.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
-    
-    if (userIndex === -1) throw { response: { data: { message: "User not found" } } };
-
-    const updatedUser = {
-      ...users[userIndex],
-      name: name.trim(),
-      fullName: name.trim(),
-      email: email.trim(),
-      profile_photo: profilePhoto
-    };
-
-    users[userIndex] = updatedUser;
-    localStorage.setItem('users', JSON.stringify(users));
-    setUser(updatedUser);
-    return updatedUser;
+    try {
+      const res = await apiClient.put('/profile', {
+        name,
+        email,
+        profile_photo: profilePhoto
+      });
+      const updatedUser = res.data.user;
+      
+      localStorage.setItem('authUser', JSON.stringify(updatedUser));
+      setUser(updatedUser);
+      return updatedUser;
+    } catch (err) {
+      throw err;
+    }
   };
 
   const changePassword = async (currentPassword, newPassword) => {
-    if (!user) throw { response: { data: { message: "Not authenticated" } } };
-
-    const users = JSON.parse(localStorage.getItem('users')) || [];
-    const userIndex = users.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
-    
-    if (userIndex === -1) throw { response: { data: { message: "User not found" } } };
-
-    if (users[userIndex].password !== currentPassword) {
-      throw { response: { data: { message: "Incorrect current password" } } };
+    try {
+      await apiClient.put('/change-password', {
+        current_password: currentPassword,
+        new_password: newPassword
+      });
+    } catch (err) {
+      throw err;
     }
-
-    users[userIndex].password = newPassword;
-    localStorage.setItem('users', JSON.stringify(users));
-    setUser(users[userIndex]);
   };
 
   const deleteAccount = async () => {
-    if (!user) return;
-
-    const users = JSON.parse(localStorage.getItem('users')) || [];
-    const filtered = users.filter(u => u.username.toLowerCase() !== user.username.toLowerCase());
-    localStorage.setItem('users', JSON.stringify(filtered));
-
-    // Also tell backend to drop this user's data tables
     try {
-      await apiClient.delete('/settings'); // We can make the settings delete endpoint drop user tables!
+      // First clean up user's active table history
+      try {
+        await apiClient.delete('/settings');
+      } catch (e) {
+        console.warn("User data reset warning:", e);
+      }
+      
+      // Delete user account on the backend
+      await apiClient.delete('/account');
     } catch (err) {
-      console.error("Failed to drop database tables on user deletion:", err);
+      console.error("Failed to delete user account on backend:", err);
+    } finally {
+      logout();
     }
-
-    logout();
   };
 
   const logout = () => {
+    localStorage.removeItem('authToken');
     localStorage.removeItem('currentUser');
+    localStorage.removeItem('authUser');
+    sessionStorage.removeItem('authToken');
     sessionStorage.removeItem('currentUser');
     setUser(null);
   };

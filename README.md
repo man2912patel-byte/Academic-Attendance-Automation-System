@@ -1,6 +1,6 @@
 # Academic Attendance Automation System (Full Stack)
 
-A production-ready Full Stack web application designed to replace the Tkinter desktop client for faculty attendance tracking and Google Sheets automation.
+A production-ready Full Stack web application designed for faculty attendance tracking and Google Sheets automation.
 
 ---
 
@@ -19,11 +19,7 @@ A production-ready Full Stack web application designed to replace the Tkinter de
 
 ### Database
 * **Development:** SQLite
-* **Production:** PostgreSQL
-
-### Deployment
-* **Frontend:** Vercel (`frontend/vercel.json`)
-* **Backend:** Render (`backend/gunicorn`)
+* **Production:** PostgreSQL (Render) or SQLite (Persistent Disk)
 
 ---
 
@@ -32,57 +28,62 @@ A production-ready Full Stack web application designed to replace the Tkinter de
 ```
 Academic-Attendance-Automation-System/
 ├── backend/                  # Flask REST API Backend
-│   ├── app/                  # Application package
-│   │   ├── __init__.py       # App factory & route registering
-│   │   ├── auth.py           # JWT generation & decorators
-│   │   ├── config.py         # Config environments (SQLite/Postgres)
-│   │   ├── models.py         # SQLAlchemy Database models (User, AttendanceRuns, etc)
-│   │   ├── routes/           # API Endpoint controllers (sync, exports)
-│   │   └── utils/            # Google Sheets API helper routines
-│   ├── run.py                # WSGI entry point
+│   ├── models/               # SQLAlchemy Database models (User, AttendanceRun, etc.)
+│   ├── routes/               # API blueprints (auth, attendance, settings, dashboard)
+│   ├── services/             # Business logic service layers
+│   ├── utils/                # Token validation & ReportLab PDF generators
+│   ├── config.py             # Config environments (SQLite/Postgres)
+│   ├── app.py                # App initialization WSGI entry point
+│   ├── render.yaml           # Render deployment blueprint spec
 │   └── requirements.txt      # Python dependencies
 ├── frontend/                 # React 19 + Vite + Tailwind Frontend
-│   ├── public/               # Public assets
 │   ├── src/                  # React components & UI views
 │   │   ├── api/              # Axios instance & request endpoints
-│   │   ├── components/       # Reusable layout widgets
-│   │   ├── context/          # Auth Context states (login, logout, token)
-│   │   ├── hooks/            # Global custom hooks
-│   │   ├── pages/            # View pages (Login, Dashboard, Generate, Settings)
-│   │   ├── App.jsx           # App routes & structure
-│   │   ├── main.jsx          # Entry point
-│   │   └── index.css         # Styling system
-│   ├── index.html            # HTML layout
+│   │   ├── components/       # Reusable layout components
+│   │   ├── context/          # Auth Context states (login, register, token)
+│   │   └── pages/            # View pages (Login, Dashboard, Generate, Settings)
 │   ├── package.json          # Node dependencies
-│   ├── tailwind.config.js    # Styling configurations
-│   ├── postcss.config.js     # CSS compilation config
+│   ├── vercel.json           # Vercel routing configuration
 │   └── vite.config.js        # Vite config server definitions
 ├── database/                 # Migration files & schema seeds
-└── docs/                     # Design patterns & API guides
+├── docs/                     # Design patterns & API guides
+└── .env.example              # Development/Production env variables template
 ```
 
 ---
 
 ## 🚀 Getting Started
 
-### 1. Database Setup
-SQLite is used for local development automatically. For production:
-* Install PostgreSQL on your server or use a hosted solution (e.g. Neon, Supabase).
-* Update `DATABASE_URL` in `.env`.
-
-### 2. Backend Installation (Flask)
+### 1. Backend Installation (Flask)
 ```bash
 cd backend
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-python run.py
+python app.py
 ```
+The Flask backend API launches on `http://localhost:5000`.
 
-### 3. Frontend Installation (React)
+### 2. Frontend Installation (React)
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 The React frontend dev server launches on `http://localhost:5173`.
+
+---
+
+## ☁️ Production Deployment
+
+### Frontend (Vercel)
+* Deploy the `frontend/` directory on Vercel.
+* Add Environment Variable:
+  - `VITE_API_URL`: The deployed URL of your Flask backend on Render.
+
+### Backend (Render)
+* Deploy the `backend/` directory on Render (Web Service type).
+* Add Environment Variables:
+  - `FLASK_ENV`: `production`
+  - `SECRET_KEY`: A secure random JWT signing key.
+  - `DATABASE_URL`: Connection URL of your production database.

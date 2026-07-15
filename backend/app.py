@@ -1,28 +1,29 @@
 import os
+import sys
 from flask import Flask, jsonify
 from flask_cors import CORS
-from flask_migrate import Migrate
-from app.config import Config
-from app.models import db
-
-migrate = Migrate()
+from config import Config
+from models import db
+from routes import auth_bp, attendance_bp, dashboard_bp, settings_bp
 
 def create_app():
+    # Fix import paths
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    
     app = Flask(__name__)
     app.config.from_object(Config)
     
     # Configure CORS
-    allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
-    CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
+    allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+    CORS(app, resources={r"/*": {"origins": allowed_origins}})
     
-    # Initialize DB and Migrations
+    # Initialize DB
     db.init_app(app)
-    migrate.init_app(app, db)
     
     # Ensure database path directory exists for SQLite
     if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite:///'):
         db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
-        db_dir = os.path.dirname(os.path.join(app.root_path, '..', db_path))
+        db_dir = os.path.dirname(os.path.join(app.root_path, db_path))
         os.makedirs(db_dir, exist_ok=True)
         
     # Ensure system folders exist
@@ -30,24 +31,32 @@ def create_app():
     os.makedirs(app.config['REPORTS_DIR'], exist_ok=True)
     os.makedirs(app.config['EXPORTS_DIR'], exist_ok=True)
     os.makedirs(app.config['BACKUP_DIR'], exist_ok=True)
-        
-    # Register blueprints
-    from app.routes.attendance_routes import attendance_bp
-    from app.routes.dashboard_routes import dashboard_bp
-    from app.routes.settings_routes import settings_bp
     
-    app.register_blueprint(attendance_bp, url_prefix='/api/attendance')
+    # Register blueprints at root (/) for clean REST API
+    app.register_blueprint(auth_bp, url_prefix='')
+    app.register_blueprint(dashboard_bp, url_prefix='/dashboard')
+    app.register_blueprint(settings_bp, url_prefix='/settings')
+    app.register_blueprint(attendance_bp, url_prefix='/attendance')
+    
+    # Register blueprints at /api prefix for frontend compatibility
+    app.register_blueprint(auth_bp, url_prefix='/api')
     app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
     app.register_blueprint(settings_bp, url_prefix='/api/settings')
+    app.register_blueprint(attendance_bp, url_prefix='/api/attendance')
     
     @app.route('/health', methods=['GET'])
     def health_check():
         return jsonify({'status': 'healthy', 'service': 'attendance-automation-api'}), 200
         
-    # Auto-create tables (Only for dev/SQLite, in prod migrations are preferred)
+    # Auto-create tables (SQLite development mode)
     with app.app_context():
         if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite:///'):
-            db.create_app_context = True
             db.create_all()
             
     return app
+
+app = create_app()
+
+if __name__ == '__main__':
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
