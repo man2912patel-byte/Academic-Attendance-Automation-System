@@ -1,27 +1,55 @@
-# Python caches
+# Dependency directories
+node_modules/
+jspm_packages/
+web_stage/
+
+# Builds and distribution
+dist/
+build/
+out/
+.next/
+
+# Python cache & build directories
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
 
-# Local User Data and SQLite databases
-data/
-history/
-backup/
-logs/
-output/
-
-# Secrets and credentials
-credentials.json
-
-# Environment variables & sessions
+# Virtual environments
 .env
-session.json
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
-# VS Code and editor config
-.vscode/
-.idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.swp
+# SQLite development databases
+*.db
+*.sqlite3
+instance/
+
+# Secret files
+.env*.local
+credentials.json
+*.pem
+*.key
+
+# Logs
+logs/
+*.log
+
+# OS Metadata
+.DS_Store
+Thumbs.db
