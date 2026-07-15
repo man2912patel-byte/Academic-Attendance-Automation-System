@@ -7,7 +7,6 @@ from models import db
 from routes import auth_bp, attendance_bp, dashboard_bp, settings_bp
 
 def create_app():
-    # Fix import paths
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     
     app = Flask(__name__)
@@ -32,17 +31,11 @@ def create_app():
     os.makedirs(app.config['EXPORTS_DIR'], exist_ok=True)
     os.makedirs(app.config['BACKUP_DIR'], exist_ok=True)
     
-    # Register blueprints at root (/) for clean REST API
+    # Register blueprints at root to prevent duplicate registration naming conflicts
     app.register_blueprint(auth_bp, url_prefix='')
-    app.register_blueprint(dashboard_bp, url_prefix='/dashboard')
-    app.register_blueprint(settings_bp, url_prefix='/settings')
-    app.register_blueprint(attendance_bp, url_prefix='/attendance')
-    
-    # Register blueprints at /api prefix for frontend compatibility
-    app.register_blueprint(auth_bp, url_prefix='/api')
-    app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
-    app.register_blueprint(settings_bp, url_prefix='/api/settings')
-    app.register_blueprint(attendance_bp, url_prefix='/api/attendance')
+    app.register_blueprint(dashboard_bp, url_prefix='')
+    app.register_blueprint(settings_bp, url_prefix='')
+    app.register_blueprint(attendance_bp, url_prefix='')
     
     @app.route('/health', methods=['GET'])
     def health_check():

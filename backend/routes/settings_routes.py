@@ -7,7 +7,7 @@ from utils.attendance_processor import parse_sheets_data
 
 settings_bp = Blueprint('settings', __name__)
 
-@settings_bp.route('', methods=['GET'])
+@settings_bp.route('/settings', methods=['GET'])
 @token_required
 def get_settings(current_user):
     """Retrieves settings preferences for the logged-in user."""
@@ -25,7 +25,7 @@ def get_settings(current_user):
     except Exception as e:
         return jsonify({'message': f'Failed to retrieve settings: {str(e)}'}), 500
 
-@settings_bp.route('', methods=['PUT'])
+@settings_bp.route('/settings', methods=['PUT'])
 @token_required
 def update_settings(current_user):
     """Updates settings preferences for the logged-in user."""
@@ -46,7 +46,7 @@ def update_settings(current_user):
     except Exception as e:
         return jsonify({'message': f'Failed to update settings: {str(e)}'}), 500
 
-@settings_bp.route('/verify-files', methods=['POST'])
+@settings_bp.route('/settings/verify-files', methods=['POST'])
 @token_required
 def verify_sources(current_user):
     """Verifies that the configured Google Sheets URLs exist, are reachable, and parse successfully."""
@@ -60,7 +60,6 @@ def verify_sources(current_user):
         }), 400
         
     try:
-        # Download and test parsing using standard urllib
         student_req = urllib.request.Request(
             student_url, 
             headers={'User-Agent': 'Mozilla/5.0'}
@@ -93,7 +92,7 @@ def verify_sources(current_user):
             'message': f'Failed to download or parse Google Sheet CSVs: {str(e)}'
         }), 500
 
-@settings_bp.route('', methods=['DELETE'])
+@settings_bp.route('/settings', methods=['DELETE'])
 @token_required
 def delete_user_data(current_user):
     """Resets user data by deleting associated attendance runs."""

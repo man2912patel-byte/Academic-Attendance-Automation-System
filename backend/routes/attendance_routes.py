@@ -43,7 +43,7 @@ def fetch_and_parse_sheets(current_user):
     
     return parse_sheets_data(mft_raw, marquee_raw)
 
-@attendance_bp.route('/dates', methods=['GET'])
+@attendance_bp.route('/attendance/dates', methods=['GET'])
 @token_required
 def get_attendance_dates(current_user):
     """Fetches unique attendance dates sorted newest first (descending)."""
@@ -54,7 +54,7 @@ def get_attendance_dates(current_user):
     except Exception as e:
         return jsonify({'message': f'Failed to retrieve dates: {str(e)}'}), 500
 
-@attendance_bp.route('/session', methods=['GET'])
+@attendance_bp.route('/attendance/session', methods=['GET'])
 @token_required
 def get_attendance_sessions(current_user):
     """Fetches available session columns for a given date."""
@@ -73,7 +73,7 @@ def get_attendance_sessions(current_user):
     except Exception as e:
         return jsonify({'message': f'Failed to retrieve sessions: {str(e)}'}), 500
 
-@attendance_bp.route('/generate', methods=['POST'])
+@attendance_bp.route('/attendance/generate', methods=['POST'])
 @token_required
 def generate_attendance(current_user):
     """Generates attendance matching, statistics, and stores the run in SQLite."""
@@ -141,7 +141,7 @@ def generate_attendance(current_user):
     except Exception as e:
         return jsonify({'message': f'Generation compilation failed: {str(e)}'}), 500
 
-@attendance_bp.route('/save-run', methods=['POST'])
+@attendance_bp.route('/attendance/save-run', methods=['POST'])
 @token_required
 def save_run_compat(current_user):
     """Compat route to save run."""
@@ -185,6 +185,7 @@ def save_run_compat(current_user):
         return jsonify({'message': str(e)}), 500
 
 @attendance_bp.route('/history', methods=['GET'])
+@attendance_bp.route('/attendance/history', methods=['GET'])
 @token_required
 def get_history(current_user):
     """Retrieves paginated and searchable history logs."""
@@ -224,6 +225,7 @@ def get_history(current_user):
         return jsonify({'message': f'Failed to retrieve history: {str(e)}'}), 500
 
 @attendance_bp.route('/history/<int:run_id>', methods=['GET'])
+@attendance_bp.route('/attendance/history/<int:run_id>', methods=['GET'])
 @token_required
 def get_run_details(current_user, run_id):
     """Retrieves details of an attendance run."""
@@ -271,6 +273,7 @@ def get_run_details(current_user, run_id):
         return jsonify({'message': f'Failed to retrieve details: {str(e)}'}), 500
 
 @attendance_bp.route('/history/<int:run_id>', methods=['DELETE'])
+@attendance_bp.route('/attendance/history/<int:run_id>', methods=['DELETE'])
 @token_required
 def delete_run(current_user, run_id):
     """Deletes an attendance run and cascades to all detailed student marks."""
@@ -285,6 +288,7 @@ def delete_run(current_user, run_id):
         return jsonify({'message': f'Failed to delete run: {str(e)}'}), 500
 
 @attendance_bp.route('/reports/stats', methods=['GET'])
+@attendance_bp.route('/attendance/reports/stats', methods=['GET'])
 @token_required
 def get_reports_stats(current_user):
     """Retrieves options to configure reports generation."""
@@ -327,7 +331,9 @@ def get_reports_stats(current_user):
     except Exception as e:
         return jsonify({'message': f'Failed to retrieve report metadata: {str(e)}'}), 500
 
+@attendance_bp.route('/reports', methods=['POST'])
 @attendance_bp.route('/reports/generate', methods=['POST'])
+@attendance_bp.route('/attendance/reports/generate', methods=['POST'])
 @token_required
 def generate_report_file(current_user):
     """Compiles daily, monthly, or custom matrix reports as Excel or PDF downloads."""
@@ -420,7 +426,7 @@ def generate_report_file(current_user):
     except Exception as e:
         return jsonify({'message': f'Report generation failed: {str(e)}'}), 500
 
-@attendance_bp.route('/export-excel', methods=['POST'])
+@attendance_bp.route('/attendance/export-excel', methods=['POST'])
 @token_required
 def export_excel_route(current_user):
     data = request.get_json() or {}
@@ -428,7 +434,7 @@ def export_excel_route(current_user):
     records = data.get('records', [])
     return export_excel_file(date_str, records)
 
-@attendance_bp.route('/export-pdf', methods=['POST'])
+@attendance_bp.route('/attendance/export-pdf', methods=['POST'])
 @token_required
 def export_pdf_route(current_user):
     data = request.get_json() or {}
