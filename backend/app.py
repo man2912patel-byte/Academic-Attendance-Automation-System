@@ -22,7 +22,10 @@ def create_app():
     # Ensure database path directory exists for SQLite
     if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite:///'):
         db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
-        db_dir = os.path.dirname(os.path.join(app.root_path, db_path))
+        if ':' in db_path:
+            db_dir = os.path.dirname(db_path)
+        else:
+            db_dir = os.path.dirname(os.path.join(app.root_path, db_path))
         os.makedirs(db_dir, exist_ok=True)
         
     # Ensure system folders exist

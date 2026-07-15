@@ -6,8 +6,9 @@ class Config:
     
     SECRET_KEY = os.getenv("SECRET_KEY", "fallback_default_secret_key_change_in_production")
     
-    # DB Configuration: SQLite development fallback or PostgreSQL url
-    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///database/development.db")
+    # DB Configuration: SQLite absolute path fallback or PostgreSQL url
+    default_db_path = Path(PROJECT_ROOT.parent / "database" / "development.db").as_posix()
+    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", f"sqlite:///{default_db_path}")
     if SQLALCHEMY_DATABASE_URI.startswith("postgres://"):
         # Fix Render postgres connection strings compatibility with SQLAlchemy >= 1.4
         SQLALCHEMY_DATABASE_URI = SQLALCHEMY_DATABASE_URI.replace("postgres://", "postgresql://", 1)
