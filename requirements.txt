@@ -1,0 +1,12 @@
+pandas>=2.0.0
+openpyxl>=3.1.0
+gspread>=5.10.0
+google-auth>=2.20.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+google-api-python-client>=2.90.0
+ttkbootstrap>=1.10.0
+Pillow>=9.5.0
+tkcalendar>=1.6.1
+reportlab>=4.0.0
+bcrypt>=4.0.0

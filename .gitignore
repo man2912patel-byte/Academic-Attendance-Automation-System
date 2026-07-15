@@ -1,0 +1,27 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local User Data and SQLite databases
+data/
+history/
+backup/
+logs/
+output/
+
+# Secrets and credentials
+credentials.json
+
+# Environment variables & sessions
+.env
+session.json
+
+# VS Code and editor config
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
