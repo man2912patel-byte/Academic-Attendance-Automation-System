@@ -113,7 +113,9 @@ def generate_attendance(current_user):
             total_students=total,
             present_count=present,
             absent_count=absent,
-            excel_file_path=str(Path(current_app.config['EXPORTS_DIR']) / current_user.username / f"Academic_Attendance_{date_str}.xlsx")
+            attendance_rate=rate,
+            excel_file_path=str(Path(current_app.config['EXPORTS_DIR']) / current_user.username / f"Academic_Attendance_{date_str}.xlsx"),
+            pdf_file_path=str(Path(current_app.config['EXPORTS_DIR']) / current_user.username / f"Academic_Attendance_{date_str}.pdf")
         )
         db.session.add(new_run)
         db.session.commit()
@@ -158,14 +160,19 @@ def save_run_compat(current_user):
             db.session.delete(existing)
             db.session.commit()
             
+        tot = int(summary.get('total', len(records)))
+        pres = int(summary.get('present', 0))
+        pct_rate = round((pres / tot * 100) if tot > 0 else 0.0, 1)
         new_run = AttendanceRun(
             user_id=current_user.id,
             attendance_date=date_obj,
             session_name=summary.get('session_name', 'Combined (Any)'),
-            total_students=summary.get('total', len(records)),
-            present_count=summary.get('present', 0),
-            absent_count=summary.get('absent', 0),
-            excel_file_path=str(Path(current_app.config['EXPORTS_DIR']) / current_user.username / f"Academic_Attendance_{date_str}.xlsx")
+            total_students=tot,
+            present_count=pres,
+            absent_count=int(summary.get('absent', 0)),
+            attendance_rate=pct_rate,
+            excel_file_path=str(Path(current_app.config['EXPORTS_DIR']) / current_user.username / f"Academic_Attendance_{date_str}.xlsx"),
+            pdf_file_path=str(Path(current_app.config['EXPORTS_DIR']) / current_user.username / f"Academic_Attendance_{date_str}.pdf")
         )
         db.session.add(new_run)
         db.session.commit()
@@ -366,7 +373,7 @@ def generate_report_file(current_user):
             if not year or not month:
                 return jsonify({'message': 'Year and Month parameters are required.'}), 400
                 
-            runs = compile_runs_list(current_user.username, year=int(year), month=int(month))
+            runs = compile_runs_list(current_user.id, year=int(year), month=int(month))
             if not runs:
                 return jsonify({'message': 'No attendance history records found for the selected month.'}), 404
                 
@@ -374,7 +381,7 @@ def generate_report_file(current_user):
             title_text = f"MONTHLY ATTENDANCE REPORT - {month_name.upper()}"
             
             if fmt == 'pdf':
-                file_stream = build_matrix_report_pdf(current_user.username, title_text, runs)
+                file_stream = build_matrix_report_pdf(current_user.id, title_text, runs)
                 return send_file(
                     file_stream,
                     as_attachment=True,
@@ -382,7 +389,7 @@ def generate_report_file(current_user):
                     mimetype="application/pdf"
                 )
             else:
-                file_stream = build_matrix_report_excel(current_user.username, title_text, runs)
+                file_stream = build_matrix_report_excel(current_user.id, title_text, runs)
                 return send_file(
                     file_stream,
                     as_attachment=True,
@@ -399,14 +406,14 @@ def generate_report_file(current_user):
             start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
             end_date = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()
             
-            runs = compile_runs_list(current_user.username, start_date=start_date, end_date=end_date)
+            runs = compile_runs_list(current_user.id, start_date=start_date, end_date=end_date)
             if not runs:
                 return jsonify({'message': 'No attendance history records found for the specified range.'}), 404
                 
             title_text = f"ATTENDANCE SUMMARY REPORT ({start_date_str} TO {end_date_str})"
             
             if fmt == 'pdf':
-                file_stream = build_matrix_report_pdf(current_user.username, title_text, runs)
+                file_stream = build_matrix_report_pdf(current_user.id, title_text, runs)
                 return send_file(
                     file_stream,
                     as_attachment=True,
@@ -414,7 +421,7 @@ def generate_report_file(current_user):
                     mimetype="application/pdf"
                 )
             else:
-                file_stream = build_matrix_report_excel(current_user.username, title_text, runs)
+                file_stream = build_matrix_report_excel(current_user.id, title_text, runs)
                 return send_file(
                     file_stream,
                     as_attachment=True,

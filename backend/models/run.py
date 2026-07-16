@@ -12,7 +12,9 @@ class AttendanceRun(db.Model):
     total_students = db.Column(db.Integer, nullable=False)
     present_count = db.Column(db.Integer, nullable=False)
     absent_count = db.Column(db.Integer, nullable=False)
+    attendance_rate = db.Column(db.Float, nullable=True)
     excel_file_path = db.Column(db.String(255), nullable=True)
+    pdf_file_path = db.Column(db.String(255), nullable=True)
     
     # Relationship
     records = db.relationship('StudentAttendance', backref='run', lazy=True, cascade="all, delete-orphan")
@@ -21,6 +23,9 @@ class AttendanceRun(db.Model):
     __table_args__ = (db.UniqueConstraint('user_id', 'attendance_date', name='_user_date_uc'),)
 
     def to_dict(self):
+        rate = self.attendance_rate
+        if rate is None and self.total_students > 0:
+            rate = round((self.present_count / self.total_students * 100), 1)
         return {
             "id": self.id,
             "user_id": self.user_id,
@@ -30,5 +35,7 @@ class AttendanceRun(db.Model):
             "total_students": self.total_students,
             "present_count": self.present_count,
             "absent_count": self.absent_count,
-            "excel_file_path": self.excel_file_path
+            "attendance_rate": round(rate, 1) if rate is not None else 0.0,
+            "excel_file_path": self.excel_file_path,
+            "pdf_file_path": self.pdf_file_path
         }

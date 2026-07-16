@@ -8,7 +8,7 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
-from utils.db_helpers import get_db_connection
+from models import db, AttendanceRun, StudentAttendance
 
 class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
@@ -34,11 +34,9 @@ class NumberedCanvas(canvas.Canvas):
         self.setStrokeColor(colors.HexColor("#D9D9D9"))
         self.setLineWidth(0.5)
         
-        # Header line & label
-        self.line(36, 576, 756, 576) # Landscape line bounds
-        self.drawString(36, 582, "Academic Attendance Automation System - Monthly Summary Report")
+        self.line(36, 576, 756, 576)
+        self.drawString(36, 582, "Academic Attendance Automation System - Summary Report")
         
-        # Footer line & label
         self.line(36, 45, 756, 45)
         page_text = f"Page {self._pageNumber} of {page_count}"
         self.drawRightString(756, 32, page_text)
@@ -46,105 +44,65 @@ class NumberedCanvas(canvas.Canvas):
         self.restoreState()
 
 
-class SqlRow:
-    """Wrapper class to allow object dot-notation access to raw SQLite row dictionaries."""
-    def __init__(self, dictionary):
-        self.__dict__.update(dictionary)
-        # Convert date string to python datetime.date if needed
-        if 'attendance_date' in dictionary and isinstance(self.attendance_date, str):
-            try:
-                self.attendance_date = datetime.datetime.strptime(self.attendance_date, "%Y-%m-%d").date()
-            except ValueError:
-                pass
-
-
-def compile_runs_list(username, start_date=None, end_date=None, year=None, month=None):
-    """Fetches all runs and dates list based on filters using raw SQL."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    sql = f"SELECT * FROM history_{username}"
-    params = []
+def compile_runs_list(user_id, start_date=None, end_date=None, year=None, month=None):
+    """Fetches all runs based on filters using SQLAlchemy ORM."""
+    query = AttendanceRun.query.filter_by(user_id=user_id)
     
     if start_date and end_date:
-        sql += " WHERE attendance_date BETWEEN ? AND ?"
-        params = [start_date.strftime("%Y-%m-%d") if hasattr(start_date, 'strftime') else start_date,
-                  end_date.strftime("%Y-%m-%d") if hasattr(end_date, 'strftime') else end_date]
+        query = query.filter(AttendanceRun.attendance_date.between(start_date, end_date))
     elif year and month:
-        month_start = f"{int(year):04d}-{int(month):02d}-01"
-        if int(month) == 12:
-            month_end = f"{int(year)+1:04d}-01-01"
+        start = datetime.date(year, month, 1)
+        if month == 12:
+            end = datetime.date(year + 1, 1, 1)
         else:
-            month_end = f"{int(year):04d}-{int(month)+1:02d}-01"
-        sql += " WHERE attendance_date >= ? AND attendance_date < ?"
-        params = [month_start, month_end]
+            end = datetime.date(year, month + 1, 1)
+        query = query.filter(AttendanceRun.attendance_date >= start, AttendanceRun.attendance_date < end)
         
-    sql += " ORDER BY attendance_date ASC"
-    cursor.execute(sql, params)
-    rows = cursor.fetchall()
-    conn.close()
-    
-    return [SqlRow(dict(r)) for r in rows]
+    return query.order_by(AttendanceRun.attendance_date.asc()).all()
 
 
-def get_month_students(username, run_ids):
-    """Fetches list of unique students under given run ids using raw SQL."""
+def get_month_students(user_id, run_ids):
+    """Fetches list of unique students under given run ids using SQLAlchemy."""
     if not run_ids:
         return []
         
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    placeholders = ",".join("?" for _ in run_ids)
-    cursor.execute(f"""
-        SELECT roll_number, enrollment_number, student_name 
-        FROM attendance_{username} 
-        WHERE run_id IN ({placeholders})
-        ORDER BY roll_number ASC
-    """, run_ids)
-    rows = cursor.fetchall()
-    conn.close()
+    records = StudentAttendance.query.filter(StudentAttendance.run_id.in_(run_ids)).order_by(StudentAttendance.roll_number.asc()).all()
     
     seen = set()
     unique_students = []
-    for r in rows:
-        if r['roll_number'] not in seen:
-            seen.add(r['roll_number'])
+    for r in records:
+        if r.roll_number not in seen:
+            seen.add(r.roll_number)
             unique_students.append({
-                "roll_number": r['roll_number'],
-                "enrollment_number": r['enrollment_number'] or "N/A",
-                "student_name": r['student_name'] or "Unknown Student"
+                "roll_number": r.roll_number,
+                "enrollment_number": r.enrollment_number or "N/A",
+                "student_name": r.student_name or "Unknown Student"
             })
     return unique_students
 
 
-def build_matrix_report_excel(username, title_text, runs):
-    """Generates styled Excel binary stream for monthly/custom matrix reports."""
+def build_matrix_report_excel(user_id, title_text, runs):
+    """Generates styled Excel binary stream for monthly/custom matrix reports using SQLAlchemy."""
     run_ids = [r.id for r in runs]
     dates = [r.attendance_date.strftime("%Y-%m-%d") for r in runs]
-    students = get_month_students(username, run_ids)
+    students = get_month_students(user_id, run_ids)
     
-    # Map student -> date -> status
     matrix = {}
     for s in students:
         matrix[s["roll_number"]] = {d: "N/A" for d in dates}
         
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    # Populate matrix
     for r in runs:
         date_str = r.attendance_date.strftime("%Y-%m-%d")
-        cursor.execute(f"SELECT roll_number, attendance FROM attendance_{username} WHERE run_id = ?", (r.id,))
-        details = cursor.fetchall()
-        for d in details:
-            if d['roll_number'] in matrix:
-                matrix[d['roll_number']][date_str] = d['attendance']
-    conn.close()
+        for record in r.records:
+            if record.roll_number in matrix:
+                matrix[record.roll_number][date_str] = record.attendance
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Summary Report"
     ws.views.sheetView[0].showGridLines = True
     
-    # Styles
     title_font = Font(name="Arial", size=14, bold=True, color="1E3D59")
     header_font = Font(name="Arial", size=10, bold=True, color="FFFFFF")
     data_font = Font(name="Arial", size=9)
@@ -169,7 +127,7 @@ def build_matrix_report_excel(username, title_text, runs):
     
     # Headers
     headers = ["Roll No", "Enrollment No", "Student Name"] + dates + ["Present Days", "Attendance %"]
-    ws.append([]) # spacer row
+    ws.append([]) # spacer
     ws.append(headers)
     ws.row_dimensions[3].height = 25
     
@@ -180,7 +138,7 @@ def build_matrix_report_excel(username, title_text, runs):
         cell.alignment = align_center
         cell.border = border
         
-    # Append Data rows
+    # Data rows
     current_row = 4
     for idx, s in enumerate(students):
         roll = s["roll_number"]
@@ -202,7 +160,6 @@ def build_matrix_report_excel(username, title_text, runs):
         ws.append(row_data)
         ws.row_dimensions[current_row].height = 20
         
-        # Styles for data row
         for col_idx in range(1, len(row_data) + 1):
             cell = ws.cell(row=current_row, column=col_idx)
             cell.font = data_font
@@ -213,23 +170,21 @@ def build_matrix_report_excel(username, title_text, runs):
             else:
                 cell.alignment = align_center
                 
-            # Highlights
             val = str(cell.value)
             if val == "Present":
                 cell.fill = present_fill
             elif val == "Absent":
                 cell.fill = absent_fill
                 
-        # Last column bold percentage
         ws.cell(row=current_row, column=len(row_data)).font = bold_data_font
         current_row += 1
         
-    # Autofit column widths
+    # Auto-fit widths
     for col in ws.columns:
         max_len = 0
         col_letter = get_column_letter(col[0].column)
         if col[0].column <= 3:
-            for cell in col[2:]: # ignore title row
+            for cell in col[2:]:
                 if cell.value: max_len = max(max_len, len(str(cell.value)))
             ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
         else:
@@ -241,27 +196,21 @@ def build_matrix_report_excel(username, title_text, runs):
     return buffer
 
 
-def build_matrix_report_pdf(username, title_text, runs):
-    """Generates styled PDF binary stream for monthly/custom matrix reports."""
+def build_matrix_report_pdf(user_id, title_text, runs):
+    """Generates styled PDF binary stream for monthly/custom matrix reports using SQLAlchemy."""
     run_ids = [r.id for r in runs]
     dates = [r.attendance_date.strftime("%Y-%m-%d") for r in runs]
-    students = get_month_students(username, run_ids)
+    students = get_month_students(user_id, run_ids)
     
-    # Map student -> date -> status
     matrix = {}
     for s in students:
         matrix[s["roll_number"]] = {d: "N/A" for d in dates}
         
-    conn = get_db_connection()
-    cursor = conn.cursor()
     for r in runs:
         date_str = r.attendance_date.strftime("%Y-%m-%d")
-        cursor.execute(f"SELECT roll_number, attendance FROM attendance_{username} WHERE run_id = ?", (r.id,))
-        details = cursor.fetchall()
-        for d in details:
-            if d['roll_number'] in matrix:
-                matrix[d['roll_number']][date_str] = d['attendance']
-    conn.close()
+        for record in r.records:
+            if record.roll_number in matrix:
+                matrix[record.roll_number][date_str] = record.attendance
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), rightMargin=36, leftMargin=36, topMargin=54, bottomMargin=54)
@@ -300,7 +249,6 @@ def build_matrix_report_pdf(username, title_text, runs):
     )
 
     story = []
-    
     story.append(Paragraph(title_text, title_style))
     story.append(Spacer(1, 10))
     
@@ -310,8 +258,8 @@ def build_matrix_report_pdf(username, title_text, runs):
     date_col_width = max(18, min(40, 420 / max(1, len(dates))))
     for _ in dates:
         col_widths.append(date_col_width)
-    col_widths.append(25) # Pres days
-    col_widths.append(30) # %
+    col_widths.append(25)
+    col_widths.append(30)
     
     table_data = [[Paragraph(h, th_style) for h in headers]]
     
