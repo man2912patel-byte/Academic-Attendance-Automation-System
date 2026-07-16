@@ -6,52 +6,49 @@ from flask_cors import CORS
 from config import Config
 from models import db
 from routes import auth_bp, attendance_bp, dashboard_bp, settings_bp
+from sqlalchemy import text
 
 def check_and_update_schema(app):
     """Automatically alter SQLite tables to add missing columns without deleting existing data."""
-    db_uri = app.config['SQLALCHEMY_DATABASE_URI']
-    if not db_uri.startswith('sqlite:///'):
-        return
-        
-    db_path = db_uri.replace('sqlite:///', '')
-    if ':' in db_path:
-        abs_path = db_path
-    else:
-        abs_path = os.path.join(app.root_path, db_path)
-        
-    if not os.path.exists(abs_path):
-        return
-        
     try:
-        conn = sqlite3.connect(abs_path)
-        cursor = conn.cursor()
-        
-        # Verify columns in attendance_runs
-        cursor.execute("PRAGMA table_info(attendance_runs);")
-        columns = [col[1] for col in cursor.fetchall()]
-        
-        if not columns:
-            conn.close()
-            return # Table does not exist yet (create_all will make it)
-            
-        if 'session_name' not in columns:
-            cursor.execute("ALTER TABLE attendance_runs ADD COLUMN session_name VARCHAR(100);")
-            
-        if 'attendance_rate' not in columns:
-            cursor.execute("ALTER TABLE attendance_runs ADD COLUMN attendance_rate REAL;")
-            
-        if 'pdf_file_path' not in columns:
-            cursor.execute("ALTER TABLE attendance_runs ADD COLUMN pdf_file_path VARCHAR(255);")
-            
-        # Backfill any null attendance rates
-        cursor.execute("""
-            UPDATE attendance_runs 
-            SET attendance_rate = (CAST(present_count AS REAL) / total_students * 100) 
-            WHERE attendance_rate IS NULL AND total_students > 0;
-        """)
-        
-        conn.commit()
-        conn.close()
+        with app.app_context():
+            engine = db.engine
+            with engine.connect() as connection:
+                # Retrieve raw DBAPI sqlite3 connection from SQLAlchemy connection
+                raw_conn = connection.connection
+                cursor = raw_conn.cursor()
+                
+                # Check columns in attendance_runs table
+                cursor.execute("PRAGMA table_info(attendance_runs);")
+                columns = [col[1] for col in cursor.fetchall()]
+                
+                if not columns:
+                    return # Table not created yet
+                    
+                modified = False
+                if 'session_name' not in columns:
+                    cursor.execute("ALTER TABLE attendance_runs ADD COLUMN session_name VARCHAR(100);")
+                    modified = True
+                    
+                if 'attendance_rate' not in columns:
+                    cursor.execute("ALTER TABLE attendance_runs ADD COLUMN attendance_rate REAL;")
+                    modified = True
+                    
+                if 'pdf_file_path' not in columns:
+                    cursor.execute("ALTER TABLE attendance_runs ADD COLUMN pdf_file_path VARCHAR(255);")
+                    modified = True
+                    
+                if modified:
+                    # Commit schema changes on the connection
+                    raw_conn.commit()
+                    
+                # Backfill any null attendance rates
+                cursor.execute("""
+                    UPDATE attendance_runs 
+                    SET attendance_rate = (CAST(present_count AS REAL) / total_students * 100) 
+                    WHERE attendance_rate IS NULL AND total_students > 0;
+                """)
+                raw_conn.commit()
     except Exception as e:
         print(f"Database schema migration error: {str(e)}", file=sys.stderr)
 
@@ -99,6 +96,7 @@ def create_app():
     @app.route('/health', methods=['GET'])
     def health_check():
         return jsonify({'status': 'healthy', 'service': 'attendance-automation-api'}), 200
+        
         
     return app
 
