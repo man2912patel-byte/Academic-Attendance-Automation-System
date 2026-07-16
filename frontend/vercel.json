@@ -2,15 +2,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://academic-attendance-backend.onrender.com/api/:path*"
-    },
-    {
-      "source": "/(login|register|forgot-password|history|reports|settings|profile)",
-      "destination": "/index.html"
+      "destination": "https://academic-attendance-automation-system-1.onrender.com/api/:path*"
     },
     {
       "source": "/(.*)",
-      "destination": "/$1"
+      "destination": "/index.html"
     }
   ]
 }
