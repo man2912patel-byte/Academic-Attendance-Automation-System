@@ -2,7 +2,6 @@ import React, { useState, useEffect, useContext } from 'react';
 import apiClient from '../api/client';
 import { AuthContext } from '../context/AuthContext';
 import { parseCSVMetadata, compileAttendancePreview } from '../utils/attendanceProcessor';
-import { getSourceUrls } from '../utils/config';
 
 export default function Generate() {
   const { user } = useContext(AuthContext);
@@ -27,35 +26,11 @@ export default function Generate() {
   const [records, setRecords] = useState([]);
   const [summary, setSummary] = useState(null);
 
-  // Load previously fetched CSV data from localStorage on mount
+  // Fetch data source automatically on mount
   useEffect(() => {
-    const loadCachedCSV = () => {
-      if (!user || !user.username) return;
-      
-      const cachedStudent = localStorage.getItem(`csv_student_${user.username.toLowerCase()}`);
-      const cachedAttendance = localStorage.getItem(`csv_attendance_${user.username.toLowerCase()}`);
-      
-      if (cachedStudent && cachedAttendance) {
-        try {
-          const metadata = parseCSVMetadata(cachedStudent, cachedAttendance);
-          setDates(metadata.dates);
-          setDateSessions(metadata.dateSessions);
-          setMftStudents(metadata.mftStudents);
-          setMarqueeStudents(metadata.marqueeStudents);
-          setDateMap(metadata.dateMap);
-          
-          if (metadata.dates.length > 0) {
-            setSelectedDate(metadata.dates[0]);
-            const initialSess = metadata.dateSessions[metadata.dates[0]];
-            setSelectedSession(initialSess ? initialSess[0] : '');
-          }
-        } catch (err) {
-          console.error("Failed to parse cached CSV data:", err);
-          setError("Failed to load previously cached Google Sheets CSV data.");
-        }
-      }
-    };
-    loadCachedCSV();
+    if (user) {
+      handleLoadDataSource();
+    }
   }, [user]);
 
   // Fetch CSVs from Google Sheets automatically
@@ -64,9 +39,17 @@ export default function Generate() {
     setSuccess('');
     setSyncLoading(true);
 
-    const { studentUrl, attendanceUrl } = getSourceUrls();
-
     try {
+      // 1. Load configuration URLs from settings API
+      const settingsRes = await apiClient.get('/settings');
+      const studentUrl = settingsRes.data.student_excel_path;
+      const attendanceUrl = settingsRes.data.attendance_excel_path;
+
+      if (!studentUrl || !attendanceUrl) {
+        throw new Error("Google Sheets CSV export URLs are not configured. Please set them in Settings.");
+      }
+
+      // 2. Fetch sheet CSV data in browser
       const [studentText, attendanceText] = await Promise.all([
         fetch(studentUrl).then(res => {
           if (!res.ok) throw new Error("Failed to download Student List CSV.");
@@ -82,15 +65,8 @@ export default function Generate() {
       console.log("Student List CSV Data:\n", studentText);
       console.log("Attendance Logs CSV Data:\n", attendanceText);
 
-      // Parse metadata
+      // 3. Parse metadata
       const metadata = parseCSVMetadata(studentText, attendanceText);
-
-      // Cache raw text in localStorage per user
-      if (user && user.username) {
-        const lowerUser = user.username.toLowerCase();
-        localStorage.setItem(`csv_student_${lowerUser}`, studentText);
-        localStorage.setItem(`csv_attendance_${lowerUser}`, attendanceText);
-      }
 
       // Update state
       setDates(metadata.dates);

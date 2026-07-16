@@ -31,14 +31,22 @@ def update_settings(current_user):
     """Updates settings preferences for the logged-in user."""
     data = request.get_json() or {}
     
-    current_user.student_excel_path = data.get('student_excel_path', '').strip()
-    current_user.attendance_excel_path = data.get('attendance_excel_path', '').strip()
-    current_user.theme = data.get('theme', 'light').strip()
-    current_user.dark_mode = bool(data.get('dark_mode', False))
-    current_user.output_folder = data.get('output_folder', '').strip()
-    current_user.backup_folder = data.get('backup_folder', '').strip()
-    current_user.export_format = data.get('export_format', 'excel').strip()
-    current_user.auto_backup = bool(data.get('auto_backup', False))
+    if 'student_excel_path' in data:
+        current_user.student_excel_path = data['student_excel_path'].strip()
+    if 'attendance_excel_path' in data:
+        current_user.attendance_excel_path = data['attendance_excel_path'].strip()
+    if 'theme' in data:
+        current_user.theme = data['theme'].strip()
+    if 'dark_mode' in data:
+        current_user.dark_mode = bool(data['dark_mode'])
+    if 'output_folder' in data:
+        current_user.output_folder = data['output_folder'].strip()
+    if 'backup_folder' in data:
+        current_user.backup_folder = data['backup_folder'].strip()
+    if 'export_format' in data:
+        current_user.export_format = data['export_format'].strip()
+    if 'auto_backup' in data:
+        current_user.auto_backup = bool(data['auto_backup'])
     
     try:
         db.session.commit()

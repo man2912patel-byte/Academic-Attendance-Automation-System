@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useContext } from 'react';
 import apiClient from '../api/client';
 import { AuthContext } from '../context/AuthContext';
-import { getSourceUrls, saveSourceUrls } from '../utils/config';
+
 
 export default function Settings() {
   const { user } = useContext(AuthContext);
@@ -40,9 +40,8 @@ export default function Settings() {
         setAutoBackup(res.data.auto_backup ?? false);
 
         // Load URLs on startup
-        const urls = getSourceUrls();
-        setStudentUrl(urls.studentUrl);
-        setAttendanceUrl(urls.attendanceUrl);
+        setStudentUrl(res.data.student_excel_path || '');
+        setAttendanceUrl(res.data.attendance_excel_path || '');
       } catch (err) {
         console.error('Failed to load settings:', err);
         setError('Failed to load system preferences from server.');
@@ -90,33 +89,19 @@ export default function Settings() {
 
     setSaveSourcesLoading(true);
     try {
-      // 1. Save the URLs in localStorage
-      saveSourceUrls(studentUrl.trim(), attendanceUrl.trim());
+      // 1. Save the URLs on the backend
+      await apiClient.put('/settings', {
+        student_excel_path: studentUrl.trim(),
+        attendance_excel_path: attendanceUrl.trim()
+      });
 
-      // 2. Reload the data source automatically
-      const [resStudent, resAttendance] = await Promise.all([
-        fetch(studentUrl.trim()).then(r => {
-          if (!r.ok) throw new Error("Failed to download Student List CSV.");
-          return r.text();
-        }),
-        fetch(attendanceUrl.trim()).then(r => {
-          if (!r.ok) throw new Error("Failed to download Attendance Sheet CSV.");
-          return r.text();
-        })
-      ]);
-
-      // Parse metadata to ensure it's valid
-      const { parseCSVMetadata } = await import('../utils/attendanceProcessor');
-      parseCSVMetadata(resStudent, resAttendance);
-
-      // Cache raw text in localStorage per user so the Generate page immediately reflects it
-      if (user && user.username) {
-        const lowerUser = user.username.toLowerCase();
-        localStorage.setItem(`csv_student_${lowerUser}`, resStudent);
-        localStorage.setItem(`csv_attendance_${lowerUser}`, resAttendance);
+      // 2. Verify configured sources on the backend
+      const verifyRes = await apiClient.post('/settings/verify-files');
+      if (!verifyRes.data.success) {
+        throw new Error(verifyRes.data.message);
       }
 
-      setSuccess('Data source updated successfully.');
+      setSuccess('Data source updated and verified successfully.');
     } catch (err) {
       setError(err.message || 'Failed to download and parse Google Sheets CSV sources.');
     } finally {
@@ -130,32 +115,16 @@ export default function Settings() {
     setTestResult(null);
     setTestLoading(true);
 
-    // Verify currently saved URLs
-    const urls = getSourceUrls();
-
     try {
-      const [resStudent, resAttendance] = await Promise.all([
-        fetch(urls.studentUrl).then(r => {
-          if (!r.ok) throw new Error("Failed to reach Student List Google Sheet.");
-          return r.text();
-        }),
-        fetch(urls.attendanceUrl).then(r => {
-          if (!r.ok) throw new Error("Failed to reach Attendance Google Sheet.");
-          return r.text();
-        })
-      ]);
-
-      const { parseCSVMetadata } = await import('../utils/attendanceProcessor');
-      parseCSVMetadata(resStudent, resAttendance);
-
+      const res = await apiClient.post('/settings/verify-files');
       setTestResult({
-        success: true,
-        message: 'Both Google Sheets CSV export links verified and parsed successfully in browser. Sources are active.'
+        success: res.data.success,
+        message: res.data.message
       });
     } catch (err) {
       setTestResult({
         success: false,
-        message: `Verification failed: ${err.message}`
+        message: err.response?.data?.message || err.message || 'Verification failed.'
       });
     } finally {
       setTestLoading(false);

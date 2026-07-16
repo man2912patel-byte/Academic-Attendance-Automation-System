@@ -15,6 +15,10 @@ def register_user(name, email, username, password, security_question=None, secur
     if security_answer:
         hashed_sec_ans = bcrypt.hashpw(security_answer.lower().strip().encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         
+    from flask import current_app
+    student_url = current_app.config.get('DEFAULT_STUDENT_URL')
+    attendance_url = current_app.config.get('DEFAULT_ATTENDANCE_URL')
+
     new_user = User(
         name=name.strip(),
         username=username.lower().strip(),
@@ -23,7 +27,9 @@ def register_user(name, email, username, password, security_question=None, secur
         security_question=security_question,
         security_answer=hashed_sec_ans,
         theme="light",
-        dark_mode=False
+        dark_mode=False,
+        student_excel_path=student_url,
+        attendance_excel_path=attendance_url
     )
     
     db.session.add(new_user)

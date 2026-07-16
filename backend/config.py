@@ -15,6 +15,16 @@ class Config:
         
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
+    # Google Sheets workbook default CSV URLs
+    DEFAULT_STUDENT_URL = os.getenv(
+        "DEFAULT_STUDENT_URL", 
+        "https://docs.google.com/spreadsheets/d/1kC28acUnDMLhoCqw48GY_8IcDo82p2L0hU2TSSf0lsI/export?format=csv"
+    )
+    DEFAULT_ATTENDANCE_URL = os.getenv(
+        "DEFAULT_ATTENDANCE_URL", 
+        "https://docs.google.com/spreadsheets/d/1ivOiTJy7utDXgZO4vGesfMCyQBc9nvA6/export?format=csv&gid=1806013456"
+    )
+    
     # File save directories
     UPLOADS_DIR = PROJECT_ROOT.parent / "uploads"
     REPORTS_DIR = PROJECT_ROOT.parent / "reports"
