@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import apiClient from '../api/client';
 import { AuthContext } from '../context/AuthContext';
-
 
 export default function Settings() {
   const { user } = useContext(AuthContext);
@@ -14,11 +13,26 @@ export default function Settings() {
   const [exportFormat, setExportFormat] = useState('excel');
   const [autoBackup, setAutoBackup] = useState(false);
 
-  // URL States
+  // Source configurations
+  const [studentSourceType, setStudentSourceType] = useState('google_sheet');
+  const [attendanceSourceType, setAttendanceSourceType] = useState('google_sheet');
   const [studentUrl, setStudentUrl] = useState('');
   const [attendanceUrl, setAttendanceUrl] = useState('');
 
-  // States
+  // Uploaded files details
+  const [studentUploadedFile, setStudentUploadedFile] = useState('');
+  const [studentMetadata, setStudentMetadata] = useState(null);
+  const [studentProgress, setStudentProgress] = useState(0);
+  const [studentUploadStatus, setStudentUploadStatus] = useState('idle'); // idle, uploading, success, error
+  const [studentDragActive, setStudentDragActive] = useState(false);
+
+  const [attendanceUploadedFile, setAttendanceUploadedFile] = useState('');
+  const [attendanceMetadata, setAttendanceMetadata] = useState(null);
+  const [attendanceProgress, setAttendanceProgress] = useState(0);
+  const [attendanceUploadStatus, setAttendanceUploadStatus] = useState('idle'); // idle, uploading, success, error
+  const [attendanceDragActive, setAttendanceDragActive] = useState(false);
+
+  // Loaders & feedback
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [testLoading, setTestLoading] = useState(false);
@@ -27,6 +41,9 @@ export default function Settings() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [testResult, setTestResult] = useState(null);
+
+  const studentFileRef = useRef(null);
+  const attendanceFileRef = useRef(null);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -39,9 +56,34 @@ export default function Settings() {
         setExportFormat(res.data.export_format || 'excel');
         setAutoBackup(res.data.auto_backup ?? false);
 
-        // Load URLs on startup
+        // Load Sources
         setStudentUrl(res.data.student_excel_path || '');
         setAttendanceUrl(res.data.attendance_excel_path || '');
+        setStudentSourceType(res.data.student_source_type || 'google_sheet');
+        setAttendanceSourceType(res.data.attendance_source_type || 'google_sheet');
+        setStudentUploadedFile(res.data.student_uploaded_file || '');
+        setAttendanceUploadedFile(res.data.attendance_uploaded_file || '');
+
+        if (res.data.student_uploaded_file) {
+          setStudentMetadata({
+            file_size: res.data.student_file_size,
+            upload_time: res.data.student_upload_time,
+            rows_detected: res.data.student_rows_detected,
+            columns_detected: res.data.student_columns_detected,
+            file_type: res.data.student_file_type
+          });
+          setStudentUploadStatus('success');
+        }
+        if (res.data.attendance_uploaded_file) {
+          setAttendanceMetadata({
+            file_size: res.data.attendance_file_size,
+            upload_time: res.data.attendance_upload_time,
+            rows_detected: res.data.attendance_rows_detected,
+            columns_detected: res.data.attendance_columns_detected,
+            file_type: res.data.attendance_file_type
+          });
+          setAttendanceUploadStatus('success');
+        }
       } catch (err) {
         console.error('Failed to load settings:', err);
         setError('Failed to load system preferences from server.');
@@ -82,28 +124,29 @@ export default function Settings() {
     setSuccess('');
     setTestResult(null);
 
-    if (!studentUrl.trim() || !attendanceUrl.trim()) {
-      setError('Both source URLs are required.');
+    const hasStudent = (studentSourceType === 'upload' && studentUploadedFile) || (studentSourceType === 'google_sheet' && studentUrl.trim());
+    const hasAttendance = (attendanceSourceType === 'upload' && attendanceUploadedFile) || (attendanceSourceType === 'google_sheet' && attendanceUrl.trim());
+
+    if (!hasStudent || !hasAttendance) {
+      setError('Please configure your Student List and Attendance source first.');
       return;
     }
 
     setSaveSourcesLoading(true);
     try {
-      // 1. Save the URLs on the backend
       await apiClient.put('/settings', {
-        student_excel_path: studentUrl.trim(),
-        attendance_excel_path: attendanceUrl.trim()
+        student_excel_path: studentSourceType === 'google_sheet' ? studentUrl.trim() : null,
+        attendance_excel_path: attendanceSourceType === 'google_sheet' ? attendanceUrl.trim() : null
       });
 
-      // 2. Verify configured sources on the backend
       const verifyRes = await apiClient.post('/settings/verify-files');
       if (!verifyRes.data.success) {
         throw new Error(verifyRes.data.message);
       }
 
-      setSuccess('Data source updated and verified successfully.');
+      setSuccess('Data sources saved and verified successfully.');
     } catch (err) {
-      setError(err.message || 'Failed to download and parse Google Sheets CSV sources.');
+      setError(err.response?.data?.message || err.message || 'Failed to save and verify sources.');
     } finally {
       setSaveSourcesLoading(false);
     }
@@ -113,8 +156,19 @@ export default function Settings() {
     setError('');
     setSuccess('');
     setTestResult(null);
-    setTestLoading(true);
 
+    const hasStudent = (studentSourceType === 'upload' && studentUploadedFile) || (studentSourceType === 'google_sheet' && studentUrl.trim());
+    const hasAttendance = (attendanceSourceType === 'upload' && attendanceUploadedFile) || (attendanceSourceType === 'google_sheet' && attendanceUrl.trim());
+
+    if (!hasStudent || !hasAttendance) {
+      setTestResult({
+        success: false,
+        message: 'Please configure your Student List and Attendance source first.'
+      });
+      return;
+    }
+
+    setTestLoading(true);
     try {
       const res = await apiClient.post('/settings/verify-files');
       setTestResult({
@@ -129,6 +183,160 @@ export default function Settings() {
     } finally {
       setTestLoading(false);
     }
+  };
+
+  // Upload Logic
+  const uploadStudentFile = async (file) => {
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    if (!['.xlsx', '.xls', '.csv'].includes(ext)) {
+      setError('Unsupported file format. Please upload .xlsx, .xls, or .csv.');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    setStudentUploadStatus('uploading');
+    setStudentProgress(0);
+    setError('');
+    setSuccess('');
+
+    try {
+      const res = await apiClient.post('/settings/upload/student', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (e) => {
+          const percent = Math.round((e.loaded * 100) / e.total);
+          setStudentProgress(percent);
+        }
+      });
+
+      setStudentUploadedFile(res.data.path);
+      setStudentMetadata(res.data.metadata);
+      setStudentUploadStatus('success');
+      setStudentSourceType('upload');
+      setStudentUrl('');
+      setSuccess('Student list file uploaded and verified successfully.');
+    } catch (err) {
+      setStudentUploadStatus('error');
+      setError(err.response?.data?.message || 'Failed to upload student list file.');
+    }
+  };
+
+  const uploadAttendanceFile = async (file) => {
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    if (!['.xlsx', '.xls', '.csv'].includes(ext)) {
+      setError('Unsupported file format. Please upload .xlsx, .xls, or .csv.');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    setAttendanceUploadStatus('uploading');
+    setAttendanceProgress(0);
+    setError('');
+    setSuccess('');
+
+    try {
+      const res = await apiClient.post('/settings/upload/attendance', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (e) => {
+          const percent = Math.round((e.loaded * 100) / e.total);
+          setAttendanceProgress(percent);
+        }
+      });
+
+      setAttendanceUploadedFile(res.data.path);
+      setAttendanceMetadata(res.data.metadata);
+      setAttendanceUploadStatus('success');
+      setAttendanceSourceType('upload');
+      setAttendanceUrl('');
+      setSuccess('Attendance logs file uploaded and verified successfully.');
+    } catch (err) {
+      setAttendanceUploadStatus('error');
+      setError(err.response?.data?.message || 'Failed to upload attendance file.');
+    }
+  };
+
+  // Delete Uploads
+  const handleDeleteStudentFile = async () => {
+    setError('');
+    setSuccess('');
+    try {
+      await apiClient.put('/settings', { student_uploaded_file: null });
+      setStudentUploadedFile('');
+      setStudentMetadata(null);
+      setStudentUploadStatus('idle');
+      setStudentSourceType('google_sheet');
+      setSuccess('Student list file removed successfully.');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to remove student file.');
+    }
+  };
+
+  const handleDeleteAttendanceFile = async () => {
+    setError('');
+    setSuccess('');
+    try {
+      await apiClient.put('/settings', { attendance_uploaded_file: null });
+      setAttendanceUploadedFile('');
+      setAttendanceMetadata(null);
+      setAttendanceUploadStatus('idle');
+      setAttendanceSourceType('google_sheet');
+      setSuccess('Attendance file removed successfully.');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to remove attendance file.');
+    }
+  };
+
+  // Student Drag handlers
+  const handleStudentDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setStudentDragActive(true);
+    } else if (e.type === "dragleave") {
+      setStudentDragActive(false);
+    }
+  };
+
+  const handleStudentDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setStudentDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      uploadStudentFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  // Attendance Drag handlers
+  const handleAttendanceDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setAttendanceDragActive(true);
+    } else if (e.type === "dragleave") {
+      setAttendanceDragActive(false);
+    }
+  };
+
+  const handleAttendanceDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setAttendanceDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      uploadAttendanceFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  // Helpers
+  const formatBytes = (bytes, decimals = 2) => {
+    if (!bytes) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
   };
 
   if (loading) {
@@ -210,41 +418,272 @@ export default function Settings() {
 
         <div className="space-y-8">
           
-          {/* Section 1: Offline Data Sources */}
-          <section className="card-premium p-8 shadow-sm space-y-6 bg-white">
+          {/* Section 1: Data Sources */}
+          <section className="card-premium p-8 shadow-sm space-y-8 bg-white">
             <h3 className="text-xl font-bold border-b border-border-main pb-3 flex items-center gap-2 text-text-primary">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-accent-blue">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 0 0-1.884 2.012l-.847 7.63c-.16 1.439.962 2.684 2.417 2.684h16.828c1.455 0 2.578-1.245 2.417-2.684l-.847-7.63a2.25 2.25 0 0 0-1.884-2.012m-16.5 0V6.75A2.25 2.25 0 0 1 4.5 4.5h15a2.25 2.25 0 0 1 2.25 2.25v3m-18 0A2.25 2.25 0 0 0 5.25 12h13.5A2.25 2.25 0 0 0 21 9.776" />
               </svg>
-              <span>Offline Data Source Settings</span>
+              <span>Data Source Settings</span>
             </h3>
 
-            <div className="space-y-6 bg-white">
-              {/* Student List Google Sheet CSV Source */}
-              <div className="space-y-2">
-                <label className="block text-text-secondary text-xs font-semibold uppercase tracking-wider">Student List Google Sheet CSV Source</label>
-                <input
-                  type="text"
-                  className="w-full input-premium text-xs"
-                  value={studentUrl}
-                  onChange={(e) => setStudentUrl(e.target.value)}
-                  placeholder="Paste student list export URL..."
-                />
+            <div className="space-y-8 bg-white">
+              
+              {/* STUDENT LIST SOURCE SECTION */}
+              <div className="space-y-4 p-5 border border-border-main rounded-2xl bg-bg-main/30 animate-fade-in">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-border-main/50 pb-3">
+                  <h4 className="text-sm font-bold text-text-primary uppercase tracking-wider">Student Source</h4>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-text-secondary">Active Source:</span>
+                    <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${
+                      studentSourceType === 'upload' 
+                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 border-emerald-200/50' 
+                        : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400 border-indigo-200/50'
+                    }`}>
+                      {studentSourceType === 'upload' ? 'Uploaded File' : 'Google Sheet'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Option 1: URL input */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[11px] font-bold text-text-secondary uppercase">Option 1: Google Sheet URL</label>
+                  </div>
+                  <input
+                    type="text"
+                    disabled={studentSourceType === 'upload'}
+                    className="w-full input-premium text-xs"
+                    value={studentUrl}
+                    onChange={(e) => setStudentUrl(e.target.value)}
+                    placeholder="Paste your Google Sheet URL here"
+                  />
+                </div>
+
+                {/* OR Separator */}
+                <div className="relative flex py-2 items-center">
+                  <div className="flex-grow border-t border-border-main/60"></div>
+                  <span className="flex-shrink mx-4 text-[10px] font-extrabold uppercase tracking-widest text-text-secondary bg-white px-3 py-1 rounded-full border border-border-main/60 shadow-sm">OR</span>
+                  <div className="flex-grow border-t border-border-main/60"></div>
+                </div>
+
+                {/* Option 2: Drag and Drop Upload */}
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-text-secondary uppercase block">Option 2: Drag & Drop Excel / CSV</label>
+                  
+                  {studentUploadStatus === 'success' && studentUploadedFile ? (
+                    /* Metadata Preview Card */
+                    <div className="p-4 border border-emerald-200/70 bg-emerald-50/20 rounded-xl flex flex-col gap-3 animate-fade-in">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center flex-shrink-0 border border-emerald-200">
+                            <span className="text-xs font-bold text-emerald-800">
+                              {studentMetadata?.file_type === 'CSV' ? 'CSV' : 'XLS'}
+                            </span>
+                          </div>
+                          <div className="min-w-0">
+                            <span className="block text-sm font-semibold text-text-primary truncate">
+                              {studentUploadedFile.split('/').pop()}
+                            </span>
+                            <span className="block text-xs text-text-secondary">
+                              {formatBytes(studentMetadata?.file_size)} • {studentMetadata?.upload_time}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleDeleteStudentFile}
+                          className="p-1 text-text-secondary hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="Remove File"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                          </svg>
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 pt-3 border-t border-border-main/50 text-xs">
+                        <div className="bg-white p-2 rounded-lg border border-border-main/50">
+                          <span className="block text-text-secondary font-medium">Rows Detected</span>
+                          <span className="text-sm font-bold text-text-primary mt-0.5 block">{studentMetadata?.rows_detected}</span>
+                        </div>
+                        <div className="bg-white p-2 rounded-lg border border-border-main/50">
+                          <span className="block text-text-secondary font-medium">Columns Detected</span>
+                          <span className="text-sm font-bold text-text-primary mt-0.5 block">{studentMetadata?.columns_detected}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Dnd Upload Drop Box */
+                    <div
+                      onDragEnter={handleStudentDrag}
+                      onDragOver={handleStudentDrag}
+                      onDragLeave={handleStudentDrag}
+                      onDrop={handleStudentDrop}
+                      onClick={() => studentFileRef.current?.click()}
+                      className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center transition-all bg-white relative cursor-pointer min-h-[140px] ${
+                        studentDragActive 
+                          ? 'border-accent-blue bg-accent-blue/5' 
+                          : 'border-border-main hover:border-accent-blue/50'
+                      }`}
+                    >
+                      <input
+                        type="file"
+                        ref={studentFileRef}
+                        accept=".xlsx,.xls,.csv"
+                        onChange={(e) => e.target.files?.[0] && uploadStudentFile(e.target.files[0])}
+                        className="hidden"
+                      />
+                      
+                      {studentUploadStatus === 'uploading' ? (
+                        <div className="flex flex-col items-center w-full">
+                          <span className="text-sm font-semibold text-text-primary mb-1">Uploading student file...</span>
+                          <div className="w-full max-w-xs bg-bg-main rounded-full h-2.5 dark:bg-gray-700 mt-2 overflow-hidden border border-border-main">
+                            <div className="bg-accent-blue h-2.5 rounded-full transition-all duration-300" style={{ width: `${studentProgress}%` }}></div>
+                          </div>
+                          <span className="text-xs text-text-secondary mt-1">{studentProgress}% complete</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center text-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-10 h-10 text-accent-blue mb-2.5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z" />
+                          </svg>
+                          <span className="text-sm font-semibold text-text-primary">Drag & drop your file here, or <span className="text-accent-blue underline">Browse Files</span></span>
+                          <span className="text-xs text-text-secondary mt-1">Supported formats: .xlsx, .xls, .csv (Max 20MB)</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Attendance Sheet Google Sheet CSV Source */}
-              <div className="space-y-2">
-                <label className="block text-text-secondary text-xs font-semibold uppercase tracking-wider">Attendance Sheet Google Sheet CSV Source</label>
-                <input
-                  type="text"
-                  className="w-full input-premium text-xs"
-                  value={attendanceUrl}
-                  onChange={(e) => setAttendanceUrl(e.target.value)}
-                  placeholder="Paste attendance sheet export URL..."
-                />
-              </div>
-              <p className="text-xs text-text-secondary opacity-75">Google Sheets data sources are fetched directly via client-side HTTPS. Local file picker uploads are disabled.</p>
+              {/* ATTENDANCE SHEET SOURCE SECTION */}
+              <div className="space-y-4 p-5 border border-border-main rounded-2xl bg-bg-main/30 animate-fade-in">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-border-main/50 pb-3">
+                  <h4 className="text-sm font-bold text-text-primary uppercase tracking-wider">Attendance Source</h4>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-text-secondary">Active Source:</span>
+                    <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider border ${
+                      attendanceSourceType === 'upload' 
+                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 border-emerald-200/50' 
+                        : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400 border-indigo-200/50'
+                    }`}>
+                      {attendanceSourceType === 'upload' ? 'Uploaded File' : 'Google Sheet'}
+                    </span>
+                  </div>
+                </div>
 
+                {/* Option 1: URL input */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[11px] font-bold text-text-secondary uppercase">Option 1: Google Sheet URL</label>
+                  </div>
+                  <input
+                    type="text"
+                    disabled={attendanceSourceType === 'upload'}
+                    className="w-full input-premium text-xs"
+                    value={attendanceUrl}
+                    onChange={(e) => setAttendanceUrl(e.target.value)}
+                    placeholder="Paste your Google Sheet URL here"
+                  />
+                </div>
+
+                {/* OR Separator */}
+                <div className="relative flex py-2 items-center">
+                  <div className="flex-grow border-t border-border-main/60"></div>
+                  <span className="flex-shrink mx-4 text-[10px] font-extrabold uppercase tracking-widest text-text-secondary bg-white px-3 py-1 rounded-full border border-border-main/60 shadow-sm">OR</span>
+                  <div className="flex-grow border-t border-border-main/60"></div>
+                </div>
+
+                {/* Option 2: Drag and Drop Upload */}
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-text-secondary uppercase block">Option 2: Drag & Drop Excel / CSV</label>
+                  
+                  {attendanceUploadStatus === 'success' && attendanceUploadedFile ? (
+                    /* Metadata Preview Card */
+                    <div className="p-4 border border-emerald-200/70 bg-emerald-50/20 rounded-xl flex flex-col gap-3 animate-fade-in">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center flex-shrink-0 border border-emerald-200">
+                            <span className="text-xs font-bold text-emerald-800">
+                              {attendanceMetadata?.file_type === 'CSV' ? 'CSV' : 'XLS'}
+                            </span>
+                          </div>
+                          <div className="min-w-0">
+                            <span className="block text-sm font-semibold text-text-primary truncate">
+                              {attendanceUploadedFile.split('/').pop()}
+                            </span>
+                            <span className="block text-xs text-text-secondary">
+                              {formatBytes(attendanceMetadata?.file_size)} • {attendanceMetadata?.upload_time}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleDeleteAttendanceFile}
+                          className="p-1 text-text-secondary hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="Remove File"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                          </svg>
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 pt-3 border-t border-border-main/50 text-xs">
+                        <div className="bg-white p-2 rounded-lg border border-border-main/50">
+                          <span className="block text-text-secondary font-medium">Rows Detected</span>
+                          <span className="text-sm font-bold text-text-primary mt-0.5 block">{attendanceMetadata?.rows_detected}</span>
+                        </div>
+                        <div className="bg-white p-2 rounded-lg border border-border-main/50">
+                          <span className="block text-text-secondary font-medium">Columns Detected</span>
+                          <span className="text-sm font-bold text-text-primary mt-0.5 block">{attendanceMetadata?.columns_detected}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Dnd Upload Drop Box */
+                    <div
+                      onDragEnter={handleAttendanceDrag}
+                      onDragOver={handleAttendanceDrag}
+                      onDragLeave={handleAttendanceDrag}
+                      onDrop={handleAttendanceDrop}
+                      onClick={() => attendanceFileRef.current?.click()}
+                      className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center transition-all bg-white relative cursor-pointer min-h-[140px] ${
+                        attendanceDragActive 
+                          ? 'border-accent-blue bg-accent-blue/5' 
+                          : 'border-border-main hover:border-accent-blue/50'
+                      }`}
+                    >
+                      <input
+                        type="file"
+                        ref={attendanceFileRef}
+                        accept=".xlsx,.xls,.csv"
+                        onChange={(e) => e.target.files?.[0] && uploadAttendanceFile(e.target.files[0])}
+                        className="hidden"
+                      />
+                      
+                      {attendanceUploadStatus === 'uploading' ? (
+                        <div className="flex flex-col items-center w-full">
+                          <span className="text-sm font-semibold text-text-primary mb-1">Uploading attendance logs...</span>
+                          <div className="w-full max-w-xs bg-bg-main rounded-full h-2.5 dark:bg-gray-700 mt-2 overflow-hidden border border-border-main">
+                            <div className="bg-accent-blue h-2.5 rounded-full transition-all duration-300" style={{ width: `${attendanceProgress}%` }}></div>
+                          </div>
+                          <span className="text-xs text-text-secondary mt-1">{attendanceProgress}% complete</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center text-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-10 h-10 text-accent-blue mb-2.5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z" />
+                          </svg>
+                          <span className="text-sm font-semibold text-text-primary">Drag & drop your file here, or <span className="text-accent-blue underline">Browse Files</span></span>
+                          <span className="text-xs text-text-secondary mt-1">Supported formats: .xlsx, .xls, .csv (Max 20MB)</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Action save trigger */}
               <button
                 type="button"
                 disabled={saveSourcesLoading}

@@ -17,6 +17,27 @@ class User(db.Model):
     student_excel_path = db.Column(db.String(512), nullable=True)
     attendance_excel_path = db.Column(db.String(512), nullable=True)
     
+    # Source type configurations (google_sheet, upload)
+    student_source_type = db.Column(db.String(50), default='google_sheet', nullable=True)
+    attendance_source_type = db.Column(db.String(50), default='google_sheet', nullable=True)
+    
+    # Uploaded file paths relative to backend uploads dir
+    student_uploaded_file = db.Column(db.String(512), nullable=True)
+    attendance_uploaded_file = db.Column(db.String(512), nullable=True)
+    
+    # Uploaded file detailed metadata
+    student_file_size = db.Column(db.Integer, nullable=True)
+    student_upload_time = db.Column(db.String(100), nullable=True)
+    student_rows_detected = db.Column(db.Integer, nullable=True)
+    student_columns_detected = db.Column(db.Integer, nullable=True)
+    student_file_type = db.Column(db.String(50), nullable=True)
+    
+    attendance_file_size = db.Column(db.Integer, nullable=True)
+    attendance_upload_time = db.Column(db.String(100), nullable=True)
+    attendance_rows_detected = db.Column(db.Integer, nullable=True)
+    attendance_columns_detected = db.Column(db.Integer, nullable=True)
+    attendance_file_type = db.Column(db.String(50), nullable=True)
+    
     # General preferences
     theme = db.Column(db.String(50), default='light', nullable=True)
     dark_mode = db.Column(db.Boolean, default=False, nullable=True)
@@ -39,6 +60,24 @@ class User(db.Model):
             "profile_photo": self.profile_photo,
             "student_excel_path": self.student_excel_path or "",
             "attendance_excel_path": self.attendance_excel_path or "",
+            
+            "student_source_type": self.student_source_type or "google_sheet",
+            "attendance_source_type": self.attendance_source_type or "google_sheet",
+            "student_uploaded_file": self.student_uploaded_file or "",
+            "attendance_uploaded_file": self.attendance_uploaded_file or "",
+            
+            "student_file_size": self.student_file_size,
+            "student_upload_time": self.student_upload_time or "",
+            "student_rows_detected": self.student_rows_detected,
+            "student_columns_detected": self.student_columns_detected,
+            "student_file_type": self.student_file_type or "",
+            
+            "attendance_file_size": self.attendance_file_size,
+            "attendance_upload_time": self.attendance_upload_time or "",
+            "attendance_rows_detected": self.attendance_rows_detected,
+            "attendance_columns_detected": self.attendance_columns_detected,
+            "attendance_file_type": self.attendance_file_type or "",
+            
             "theme": self.theme or 'light',
             "dark_mode": self.dark_mode if self.dark_mode is not None else False,
             "output_folder": self.output_folder or '',

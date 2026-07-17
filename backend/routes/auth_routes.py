@@ -136,6 +136,14 @@ def change_password(current_user):
 @token_required
 def delete_account(current_user):
     try:
+        # Clean up user uploads
+        import shutil
+        import os
+        from flask import current_app
+        user_uploads_path = os.path.join(current_app.config['UPLOADS_DIR'], str(current_user.id))
+        if os.path.exists(user_uploads_path):
+            shutil.rmtree(user_uploads_path)
+
         db.session.delete(current_user)
         db.session.commit()
         return jsonify({'message': 'Account and database configurations deleted successfully.'}), 200

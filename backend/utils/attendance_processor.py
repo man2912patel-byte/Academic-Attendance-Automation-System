@@ -89,121 +89,223 @@ def resolve_date_sequence(raw_date_strings):
 
     return best_seq
 
-def parse_sheets_data(mft_raw, marquee_raw):
-    # 1. Parse MFT List
-    if not mft_raw or len(mft_raw) < 1:
-        raise ValueError("MFT Student list is empty.")
-        
-    email_key = None
-    roll_key = None
+def clean_header(h):
+    if h is None:
+        return ""
+    h_str = str(h).replace('\ufeff', '').strip()
+    h_str = "".join(ch for ch in h_str if ch.isprintable())
+    return h_str.strip()
+
+def parse_sheets_data(mft_raw, marquee_raw, student_url=None, attendance_url=None):
+    # Log parser parameters and stages
+    print("=== PARSER STAGE: Header detection started ===")
+    if student_url:
+        print(f"[LOG] Final Student CSV URL: {student_url}")
+    if attendance_url:
+        print(f"[LOG] Final Attendance CSV URL: {attendance_url}")
+
+    # Student List Headers
+    raw_mft_headers = list(mft_raw[0].keys()) if mft_raw else []
+    print(f"[LOG] Raw first header row (Student): {raw_mft_headers}")
     
-    for k in mft_raw[0].keys():
-        k_low = k.strip().lower()
-        if "email" in k_low or "mail" in k_low:
-            email_key = k
-        elif "rhn" in k_low or "roll" in k_low or "id" in k_low:
-            roll_key = k
-
-    if not email_key and mft_raw[0]:
-        email_key = list(mft_raw[0].keys())[min(1, len(mft_raw[0])-1)]
-    if not roll_key and mft_raw[0]:
-        roll_key = list(mft_raw[0].keys())[0]
-
-    mft_students = []
-    for row in mft_raw:
-        email = str(row.get(email_key, "")).strip()
-        roll = str(row.get(roll_key, "")).strip()
-        
-        enrollment = ""
-        if email and "@" in email:
-            username = email.split("@")[0]
-            if username.isdigit():
-                enrollment = username
-        
-        mft_students.append({
-            "raw_email": email,
-            "roll_no": roll,
-            "extracted_enrollment": enrollment
-        })
-
-    # 2. Parse Marquee Sheet
-    if not marquee_raw or len(marquee_raw) < 2:
-        raise ValueError("Marquee attendance must have at least 2 header rows.")
-
-    row_0 = [str(cell).strip() for cell in marquee_raw[0]]
-    row_1 = [str(cell).strip() for cell in marquee_raw[1]]
-    data_rows = marquee_raw[2:]
-
-    enroll_col_idx = None
-    name_col_idx = None
-    email_col_idx = None
+    parsed_mft_headers = [str(k or "").strip() for k in raw_mft_headers]
+    print(f"[LOG] Parsed headers (Student): {parsed_mft_headers}")
     
-    for idx, col_name in enumerate(row_0):
-        col_name_low = col_name.lower()
-        if "enrollment" in col_name_low or "enroll" in col_name_low:
-            enroll_col_idx = idx
-        elif "name" in col_name_low or "student" in col_name_low:
-            name_col_idx = idx
-        elif "mail" in col_name_low or "email" in col_name_low:
-            email_col_idx = idx
+    cleaned_mft_headers = [clean_header(h) for h in raw_mft_headers]
+    print(f"[LOG] Headers after cleanup (Student): {cleaned_mft_headers}")
 
-    if enroll_col_idx is None:
-        enroll_col_idx = 6
-    if name_col_idx is None:
-        name_col_idx = 7
-    if email_col_idx is None:
-        email_col_idx = 14
-
-    raw_headers_list = []
-    last_raw_date = ""
-
-    for idx in range(min(len(row_0), len(row_1))):
-        if idx < 15:
-            continue
-            
-        cell_0 = row_0[idx].strip()
-        cell_1 = row_1[idx].strip()
+    # Attendance Sheet Headers
+    raw_marquee_headers_0 = marquee_raw[0] if marquee_raw else []
+    print(f"[LOG] Raw first header row (Attendance): {raw_marquee_headers_0}")
+    
+    parsed_marquee_headers_0 = [str(c or "").strip() for c in raw_marquee_headers_0]
+    print(f"[LOG] Parsed headers (Attendance): {parsed_marquee_headers_0}")
+    
+    cleaned_marquee_headers_0 = [clean_header(h) for h in raw_marquee_headers_0]
+    print(f"[LOG] Headers after cleanup (Attendance): {cleaned_marquee_headers_0}")
+    
+    marquee_headers_1 = [clean_header(c) for c in marquee_raw[1]] if len(marquee_raw) > 1 else []
+    
+    print("[DEBUG] First 5 rows of Student List:")
+    for r in mft_raw[:5]:
+         print(f"  {r}")
         
-        if cell_0:
-            if get_date_candidates(cell_0):
-                last_raw_date = cell_0
-            else:
-                last_raw_date = ""
-        
-        if last_raw_date:
-            raw_headers_list.append((idx, last_raw_date, cell_1))
+    print("[DEBUG] First 5 rows of Attendance Sheet:")
+    for r in marquee_raw[:5]:
+         print(f"  {r[:10]} ... (truncated)")
 
-    raw_date_strings = [item[1] for item in raw_headers_list]
-    resolved_dates = resolve_date_sequence(raw_date_strings)
+    # Stage 1: Student list headers
+    print("=== PARSER STAGE: Student List Header Parsing ===")
+    try:
+        email_key = None
+        roll_key = None
+        for orig_k in raw_mft_headers:
+            k_clean = clean_header(orig_k)
+            if not k_clean:
+                # Ignore empty header (could be trailing empty columns)
+                continue
+            k_low = k_clean.lower()
+            if "email" in k_low or "mail" in k_low:
+                email_key = orig_k
+            elif "rhn" in k_low or "roll" in k_low or "id" in k_low:
+                roll_key = orig_k
+        if not email_key and not roll_key:
+            raise ValueError("Student List is missing required columns. It must contain 'Roll No' or 'Email'.")
+    except Exception as e:
+        if isinstance(e, ValueError):
+            raise e
+        raise ValueError(f"Failure while parsing student list headers. Detail: {str(e)}")
 
-    date_map = {}
-    for i, (col_idx, _, session_name) in enumerate(raw_headers_list):
-        if i < len(resolved_dates):
-            date_obj = resolved_dates[i]
-            session_name = session_name if session_name else f"Session {col_idx}"
-            if date_obj not in date_map:
-                date_map[date_obj] = []
-            date_map[date_obj].append((col_idx, session_name))
-
-    marquee_students = []
-    for r_idx, row in enumerate(data_rows):
-        if len(row) <= max(enroll_col_idx, name_col_idx, email_col_idx):
-            continue
+    # Stage 2: Load student records
+    print("=== PARSER STAGE: Loading Student Records ===")
+    try:
+        mft_students = []
+        for row in mft_raw:
+            email = str(row.get(email_key) or "").strip()
+            roll = str(row.get(roll_key) or "").strip()
             
-        enroll = str(row[enroll_col_idx]).strip()
-        name = str(row[name_col_idx]).strip()
-        email = str(row[email_col_idx]).strip()
-        
-        if not enroll and not name:
-            continue
+            enrollment = ""
+            if email and "@" in email:
+                username = email.split("@")[0]
+                if username.isdigit():
+                    enrollment = username
             
-        marquee_students.append({
-            "row_idx": r_idx,
-            "enrollment": enroll,
-            "name": name,
-            "email": email,
-            "raw_row": row
-        })
+            mft_students.append({
+                "raw_email": email,
+                "roll_no": roll,
+                "extracted_enrollment": enrollment
+            })
+    except Exception as e:
+        raise ValueError(f"Failure while loading student records. Detail: {str(e)}")
+
+    # Stage 3: Detect attendance headers
+    print("=== PARSER STAGE: Detecting Attendance Headers ===")
+    try:
+        if not marquee_raw or len(marquee_raw) < 2:
+            raise ValueError("Attendance Sheet structure is invalid.")
+            
+        row_0 = cleaned_marquee_headers_0
+        row_1 = marquee_headers_1
+        data_rows = marquee_raw[2:]
+        
+        enroll_col_idx = None
+        name_col_idx = None
+        email_col_idx = None
+        
+        for idx, col_name in enumerate(row_0):
+            if not col_name:
+                continue
+            col_name_low = col_name.lower()
+            if "enrollment" in col_name_low or "enroll" in col_name_low:
+                enroll_col_idx = idx
+            elif "name" in col_name_low or "student" in col_name_low:
+                name_col_idx = idx
+            elif "mail" in col_name_low or "email" in col_name_low:
+                email_col_idx = idx
+
+        # Find first date column index dynamically to mark where student columns end
+        first_date_idx = None
+        for idx, col_name in enumerate(row_0):
+            if col_name and get_date_candidates(col_name):
+                first_date_idx = idx
+                break
+
+        if first_date_idx is None:
+            raise ValueError("Date columns were not found. Please ensure row 0 contains valid class dates.")
+
+        if name_col_idx is None:
+            raise ValueError("Student Name column is missing.")
+            
+        if enroll_col_idx is None and email_col_idx is None:
+            raise ValueError("Attendance Sheet structure is invalid. Required student identifier columns (Enrollment or Email) were not found.")
+
+        student_indices = {enroll_col_idx, name_col_idx, email_col_idx} - {None}
+    except Exception as e:
+        if isinstance(e, ValueError):
+            raise e
+        raise ValueError(f"Failure while detecting attendance headers. Detail: {str(e)}")
+
+    # Stage 4: Resolving attendance date columns
+    print("=== PARSER STAGE: Resolving Attendance Date Columns ===")
+    try:
+        raw_headers_list = []
+        last_raw_date = ""
+        
+        for idx in range(min(len(row_0), len(row_1))):
+            if idx in student_indices:
+                continue
+                
+            cell_0 = str(row_0[idx] or "").strip()
+            cell_1 = str(row_1[idx] or "").strip()
+            
+            if cell_0:
+                if get_date_candidates(cell_0):
+                    last_raw_date = cell_0
+                else:
+                    last_raw_date = ""
+            
+            if last_raw_date:
+                raw_headers_list.append((idx, last_raw_date, cell_1))
+                
+        if not raw_headers_list:
+            raise ValueError("Date columns were not found. Please ensure row 0 contains valid class dates.")
+            
+        raw_date_strings = [item[1] for item in raw_headers_list]
+        resolved_dates = resolve_date_sequence(raw_date_strings)
+        
+        if not resolved_dates:
+            raise ValueError("Date columns were not found. Please ensure row 0 contains valid class dates.")
+    except Exception as e:
+        if isinstance(e, ValueError):
+            raise e
+        raise ValueError(f"Failure while resolving attendance date columns. Detail: {str(e)}")
+
+    # Stage 5: Extracting attendance session columns
+    print("=== PARSER STAGE: Extracting Attendance Session Columns ===")
+    try:
+        date_map = {}
+        for i, (col_idx, _, session_name) in enumerate(raw_headers_list):
+            if i < len(resolved_dates):
+                date_obj = resolved_dates[i]
+                session_name = session_name if session_name else f"Session {col_idx}"
+                if date_obj not in date_map:
+                    date_map[date_obj] = []
+                date_map[date_obj].append((col_idx, session_name))
+                
+        if not date_map:
+            raise ValueError("No sessions detected. Please check that attendance session columns are defined.")
+    except Exception as e:
+        if isinstance(e, ValueError):
+            raise e
+        raise ValueError(f"Failure while extracting attendance session columns. Detail: {str(e)}")
+
+    # Stage 6: Loading attendance student rows
+    print("=== PARSER STAGE: Loading Attendance Student Rows ===")
+    try:
+        active_indices = [idx for idx in [enroll_col_idx, name_col_idx, email_col_idx] if idx is not None]
+        max_idx = max(active_indices) if active_indices else 0
+        
+        marquee_students = []
+        for r_idx, row in enumerate(data_rows):
+            if len(row) <= max_idx:
+                continue
+                
+            enroll = str(row[enroll_col_idx] or "").strip() if enroll_col_idx is not None else ""
+            name = str(row[name_col_idx] or "").strip() if name_col_idx is not None else ""
+            email = str(row[email_col_idx] or "").strip() if email_col_idx is not None else ""
+            
+            if not enroll and not name:
+                continue
+                
+            marquee_students.append({
+                "row_idx": r_idx,
+                "enrollment": enroll,
+                "name": name,
+                "email": email,
+                "raw_row": row
+            })
+    except Exception as e:
+        raise ValueError(f"Failure while loading attendance student rows. Detail: {str(e)}")
 
     return mft_students, marquee_students, date_map
 
@@ -317,30 +419,44 @@ import openpyxl
 def load_student_list_excel(file_path):
     if not file_path or not os.path.exists(file_path):
         raise FileNotFoundError(f"Student list Excel file not found or path is empty: {file_path}")
-    wb = openpyxl.load_workbook(file_path, data_only=True)
-    sheet = wb.active
-    rows = list(sheet.rows)
-    if len(rows) < 1:
-        return []
-    headers = [cell.value for cell in rows[0]]
-    mft_raw = []
-    for row in rows[1:]:
-        row_dict = {}
-        for col_idx, cell in enumerate(row):
-            if col_idx < len(headers):
-                header = headers[col_idx]
-                if header is not None:
-                    row_dict[str(header)] = cell.value
-        if row_dict:
-            mft_raw.append(row_dict)
+    
+    print(f"[LOG] File path: {file_path} - Open started")
+    with open(file_path, "rb") as f:
+        wb = openpyxl.load_workbook(f, data_only=True)
+        sheet = wb.active
+        rows = list(sheet.rows)
+        print(f"[LOG] File path: {file_path} - Read completed")
+        if len(rows) < 1:
+            wb.close()
+            print(f"[LOG] File path: {file_path} - Workbook closed")
+            return []
+        headers = [cell.value for cell in rows[0]]
+        mft_raw = []
+        for row in rows[1:]:
+            row_dict = {}
+            for col_idx, cell in enumerate(row):
+                if col_idx < len(headers):
+                    header = headers[col_idx]
+                    if header is not None:
+                        row_dict[str(header)] = cell.value
+            if row_dict:
+                mft_raw.append(row_dict)
+        wb.close()
+        print(f"[LOG] File path: {file_path} - Workbook closed")
     return mft_raw
 
 def load_attendance_logs_excel(file_path):
     if not file_path or not os.path.exists(file_path):
         raise FileNotFoundError(f"Attendance logs Excel file not found or path is empty: {file_path}")
-    wb = openpyxl.load_workbook(file_path, data_only=True)
-    sheet = wb.active
-    marquee_raw = []
-    for row in sheet.rows:
-        marquee_raw.append([cell.value for cell in row])
+    
+    print(f"[LOG] File path: {file_path} - Open started")
+    with open(file_path, "rb") as f:
+        wb = openpyxl.load_workbook(f, data_only=True)
+        sheet = wb.active
+        marquee_raw = []
+        for row in sheet.rows:
+            marquee_raw.append([cell.value for cell in row])
+        print(f"[LOG] File path: {file_path} - Read completed")
+        wb.close()
+        print(f"[LOG] File path: {file_path} - Workbook closed")
     return marquee_raw

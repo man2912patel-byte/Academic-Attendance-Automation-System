@@ -1,6 +1,17 @@
 import os
 import sys
 import sqlite3
+import csv
+
+# Set CSV field size limit globally to prevent OverflowError or Field Limit Errors
+max_limit = sys.maxsize
+while True:
+    try:
+        csv.field_size_limit(max_limit)
+        break
+    except OverflowError:
+        max_limit = int(max_limit / 10)
+
 from flask import Flask, jsonify
 from flask_cors import CORS
 from config import Config
@@ -55,6 +66,38 @@ def check_and_update_schema(app):
                     AND total_students > 0;
                 """)
                 raw_conn.commit()
+
+                # Check columns in users table
+                cursor.execute("PRAGMA table_info(users);")
+                user_columns = [col[1] for col in cursor.fetchall()]
+
+                if user_columns:
+                    user_modified = False
+
+                    new_cols = [
+                        ('student_source_type', "VARCHAR(50) DEFAULT 'google_sheet'"),
+                        ('attendance_source_type', "VARCHAR(50) DEFAULT 'google_sheet'"),
+                        ('student_uploaded_file', "VARCHAR(512)"),
+                        ('attendance_uploaded_file', "VARCHAR(512)"),
+                        ('student_file_size', "INTEGER"),
+                        ('student_upload_time', "VARCHAR(100)"),
+                        ('student_rows_detected', "INTEGER"),
+                        ('student_columns_detected', "INTEGER"),
+                        ('student_file_type', "VARCHAR(50)"),
+                        ('attendance_file_size', "INTEGER"),
+                        ('attendance_upload_time', "VARCHAR(100)"),
+                        ('attendance_rows_detected', "INTEGER"),
+                        ('attendance_columns_detected', "INTEGER"),
+                        ('attendance_file_type', "VARCHAR(50)")
+                    ]
+
+                    for col_name, col_type in new_cols:
+                        if col_name not in user_columns:
+                            cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type};")
+                            user_modified = True
+
+                    if user_modified:
+                        raw_conn.commit()
 
     except Exception as e:
         print(f"Database schema migration error: {str(e)}", file=sys.stderr)

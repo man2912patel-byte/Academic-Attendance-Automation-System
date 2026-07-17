@@ -1,6 +1,17 @@
 import urllib.request
 import csv
+import sys
 import io
+
+# Set CSV field size limit globally to prevent OverflowError or Field Limit Errors
+max_limit = sys.maxsize
+while True:
+    try:
+        csv.field_size_limit(max_limit)
+        break
+    except OverflowError:
+        max_limit = int(max_limit / 10)
+
 import datetime
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill
@@ -20,28 +31,260 @@ from utils.attendance_processor import (
 
 attendance_bp = Blueprint('attendance', __name__)
 
+import os
+import tempfile
+
+import time
+import traceback
+
+import re
+
+def convert_gsheet_url(url):
+    if not url or not isinstance(url, str):
+        return url
+    if "docs.google.com/spreadsheets" in url and "/edit" in url:
+        match_id = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
+        if match_id:
+            sheet_id = match_id.group(1)
+            match_gid = re.search(r'gid=([0-9]+)', url)
+            gid = match_gid.group(1) if match_gid else "0"
+            return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+    return url
+
+def mask_sheet_url(url):
+    if not url:
+        return ""
+    if "/d/" in url:
+        try:
+            parts = url.split("/d/")
+            subparts = parts[1].split("/")
+            sheet_id = subparts[0]
+            masked_id = sheet_id[:8] + "..." + sheet_id[-4:] if len(sheet_id) > 12 else "..."
+            subparts[0] = masked_id
+            parts[1] = "/".join(subparts)
+            return "/d/".join(parts)
+        except Exception:
+            return "Masked URL (Format unresolvable)"
+    return url
+
 def fetch_and_parse_sheets(current_user):
-    student_url = current_user.student_excel_path
-    attendance_url = current_user.attendance_excel_path
+    start_time = time.time()
+    user_id = current_user.id
+    student_src = current_user.student_source_type or 'google_sheet'
+    attendance_src = current_user.attendance_source_type or 'google_sheet'
     
-    if not student_url or not attendance_url:
-        raise ValueError("Google Sheets CSV export URLs are not configured in Settings.")
+    # Initialize log variables
+    student_url_masked = mask_sheet_url(convert_gsheet_url(current_user.student_excel_path)) if student_src == 'google_sheet' else "N/A"
+    attendance_url_masked = mask_sheet_url(convert_gsheet_url(current_user.attendance_excel_path)) if attendance_src == 'google_sheet' else "N/A"
+    student_filename = current_user.student_uploaded_file.split('/')[-1] if (student_src == 'upload' and current_user.student_uploaded_file) else "N/A"
+    attendance_filename = current_user.attendance_uploaded_file.split('/')[-1] if (attendance_src == 'upload' and current_user.attendance_uploaded_file) else "N/A"
+    
+    student_http_status = None
+    attendance_http_status = None
+    student_bytes_len = 0
+    attendance_bytes_len = 0
+    student_encoding = "UTF-8"
+    attendance_encoding = "UTF-8"
+    student_rows = 0
+    attendance_rows = 0
+    student_cols = 0
+    attendance_cols = 0
+    student_headers = []
+    attendance_headers = []
+    error_trace = None
+
+    try:
+        # 1. Validate Student configuration
+        if student_src == 'google_sheet':
+            if not current_user.student_excel_path:
+                raise ValueError("No Student List source configured.")
+        elif student_src == 'upload':
+            if not current_user.student_uploaded_file:
+                raise ValueError("No Student List source configured.")
+        else:
+            raise ValueError("No Student List source configured.")
+
+        # 2. Validate Attendance configuration
+        if attendance_src == 'google_sheet':
+            if not current_user.attendance_excel_path:
+                raise ValueError("No Attendance source configured.")
+        elif attendance_src == 'upload':
+            if not current_user.attendance_uploaded_file:
+                raise ValueError("No Attendance source configured.")
+        else:
+            raise ValueError("No Attendance source configured.")
+
+        mft_raw = []
+        marquee_raw = []
+
+        # 3. Load Student Data
+        if student_src == 'upload':
+            from services.storage_service import StorageService
+            storage = StorageService.get_provider()
+            try:
+                student_bytes = storage.read_file(current_user.student_uploaded_file)
+                student_bytes_len = len(student_bytes)
+                ext = os.path.splitext(current_user.student_uploaded_file)[1].lower()
+                if ext == '.csv':
+                    student_csv = student_bytes.decode('utf-8', errors='ignore')
+                    mft_reader = csv.DictReader(student_csv.splitlines())
+                    mft_raw = [dict(row) for row in mft_reader]
+                else:
+                    student_encoding = "Excel Default"
+                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                        tmp.write(student_bytes)
+                        tmp_path = tmp.name
+                        tmp.close() # Explicitly close the file handle on Windows before reopening it
+                    try:
+                        from utils.attendance_processor import load_student_list_excel
+                        mft_raw = load_student_list_excel(tmp_path)
+                    finally:
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                            print(f"[LOG] File path: {tmp_path} - File deleted")
+            except Exception as e:
+                raise ValueError(f"Uploaded CSV is corrupted. Detail: {str(e)}")
+        else:
+            student_url = convert_gsheet_url(current_user.student_excel_path)
+            print(f"[LOG] Final Student CSV URL: {student_url_masked}")
+            student_req = urllib.request.Request(student_url, headers={'User-Agent': 'Mozilla/5.0'})
+            try:
+                with urllib.request.urlopen(student_req, timeout=15) as r:
+                    student_http_status = getattr(r, 'status', 200)
+                    student_bytes = r.read()
+                student_bytes_len = len(student_bytes)
+                student_csv = student_bytes.decode('utf-8', errors='ignore')
+                print(f"[LOG] Raw CSV Content from Google Sheets (first 2000 chars):\n{student_csv[:2000]}")
+                mft_reader = csv.DictReader(student_csv.splitlines())
+                mft_raw = [dict(row) for row in mft_reader]
+            except Exception as e:
+                raise ValueError(f"Google Sheet cannot be accessed. Detail: {str(e)}")
+
+        student_rows = len(mft_raw)
+        student_cols = len(mft_raw[0].keys()) if mft_raw else 0
+        student_headers = list(mft_raw[0].keys())[:5] if mft_raw else []
+
+        # 4. Load Attendance Data
+        if attendance_src == 'upload':
+            from services.storage_service import StorageService
+            storage = StorageService.get_provider()
+            try:
+                attendance_bytes = storage.read_file(current_user.attendance_uploaded_file)
+                attendance_bytes_len = len(attendance_bytes)
+                ext = os.path.splitext(current_user.attendance_uploaded_file)[1].lower()
+                if ext == '.csv':
+                    attendance_csv = attendance_bytes.decode('utf-8', errors='ignore')
+                    marquee_reader = csv.reader(attendance_csv.splitlines())
+                    marquee_raw = [row for row in marquee_reader]
+                else:
+                    attendance_encoding = "Excel Default"
+                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                        tmp.write(attendance_bytes)
+                        tmp_path = tmp.name
+                        tmp.close() # Explicitly close the file handle on Windows before reopening it
+                    try:
+                        from utils.attendance_processor import load_attendance_logs_excel
+                        marquee_raw = load_attendance_logs_excel(tmp_path)
+                    finally:
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                            print(f"[LOG] File path: {tmp_path} - File deleted")
+            except Exception as e:
+                raise ValueError(f"Uploaded CSV is corrupted. Detail: {str(e)}")
+        else:
+            attendance_url = convert_gsheet_url(current_user.attendance_excel_path)
+            print(f"[LOG] Final Attendance CSV URL: {attendance_url_masked}")
+            attendance_req = urllib.request.Request(attendance_url, headers={'User-Agent': 'Mozilla/5.0'})
+            try:
+                with urllib.request.urlopen(attendance_req, timeout=15) as r:
+                    attendance_http_status = getattr(r, 'status', 200)
+                    attendance_bytes = r.read()
+                attendance_bytes_len = len(attendance_bytes)
+                attendance_csv = attendance_bytes.decode('utf-8', errors='ignore')
+                print(f"[LOG] Raw CSV Content from Google Sheets (first 2000 chars):\n{attendance_csv[:2000]}")
+                marquee_reader = csv.reader(attendance_csv.splitlines())
+                marquee_raw = [row for row in marquee_reader]
+            except Exception as e:
+                raise ValueError(f"Google Sheet cannot be accessed. Detail: {str(e)}")
+
+        attendance_rows = len(marquee_raw)
+        attendance_cols = len(marquee_raw[0]) if marquee_raw else 0
+        attendance_headers = marquee_raw[0][:5] if marquee_raw else []
+
+        res = parse_sheets_data(mft_raw, marquee_raw, student_url=student_url_masked, attendance_url=attendance_url_masked)
         
-    student_req = urllib.request.Request(student_url, headers={'User-Agent': 'Mozilla/5.0'})
-    attendance_req = urllib.request.Request(attendance_url, headers={'User-Agent': 'Mozilla/5.0'})
-    
-    with urllib.request.urlopen(student_req, timeout=15) as r:
-        student_csv = r.read().decode('utf-8')
-    with urllib.request.urlopen(attendance_req, timeout=15) as r:
-        attendance_csv = r.read().decode('utf-8')
-        
-    mft_reader = csv.DictReader(student_csv.splitlines())
-    mft_raw = [dict(row) for row in mft_reader]
-    
-    marquee_reader = csv.reader(attendance_csv.splitlines())
-    marquee_raw = [row for row in marquee_reader]
-    
-    return parse_sheets_data(mft_raw, marquee_raw)
+        # Log successful load parameters
+        processing_time = time.time() - start_time
+        print(f"""
+=== PROCESS LOG [SUCCESS] ===
+User ID: {user_id}
+Student Source Type: {student_src}
+Attendance Source Type: {attendance_src}
+Student URL: {student_url_masked}
+Attendance URL: {attendance_url_masked}
+Student Filename: {student_filename}
+Attendance Filename: {attendance_filename}
+Student HTTP Status: {student_http_status}
+Attendance HTTP Status: {attendance_http_status}
+Student Downloaded Bytes: {student_bytes_len}
+Attendance Downloaded Bytes: {attendance_bytes_len}
+Student Encoding: {student_encoding}
+Attendance Encoding: {attendance_encoding}
+Student Rows: {student_rows}
+Attendance Rows: {attendance_rows}
+Student Columns: {student_cols}
+Attendance Columns: {attendance_cols}
+Student Headers: {student_headers}
+Attendance Headers: {attendance_headers}
+Processing Time: {processing_time:.4f}s
+Error Traceback: None
+=============================
+""")
+        return res
+
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        processing_time = time.time() - start_time
+        print(f"""
+=== PROCESS LOG [FAILED] ===
+User ID: {user_id}
+Student Source Type: {student_src}
+Attendance Source Type: {attendance_src}
+Student URL: {student_url_masked}
+Attendance URL: {attendance_url_masked}
+Student Filename: {student_filename}
+Attendance Filename: {attendance_filename}
+Student HTTP Status: {student_http_status}
+Attendance HTTP Status: {attendance_http_status}
+Student Downloaded Bytes: {student_bytes_len}
+Attendance Downloaded Bytes: {attendance_bytes_len}
+Student Encoding: {student_encoding}
+Attendance Encoding: {attendance_encoding}
+Student Rows: {student_rows}
+Attendance Rows: {attendance_rows}
+Student Columns: {student_cols}
+Attendance Columns: {attendance_cols}
+Student Headers: {student_headers}
+Attendance Headers: {attendance_headers}
+Processing Time: {processing_time:.4f}s
+Error Traceback:
+{error_trace}
+============================
+""")
+        raise ValueError(f"Spreadsheet parsing failed: {str(e)}")
+
+def handle_parse_exception(e):
+    err_msg = str(e)
+    err_low = err_msg.lower()
+    if "no student" in err_low or "no attendance" in err_low:
+        return jsonify({'message': err_msg}), 400
+    if "invalid student list structure" in err_low or "invalid attendance logs structure" in err_low or "invalid sheet structure" in err_low:
+        return jsonify({'message': err_msg}), 400
+    if "fetch google sheet" in err_low or "download" in err_low or "not found" in err_low:
+        return jsonify({'message': err_msg}), 404
+    if "parsing failed" in err_low or "failed to load" in err_low or "read csv" in err_low or "read excel" in err_low or "format" in err_low or "field larger than field limit" in err_low:
+        return jsonify({'message': err_msg}), 422
+    return jsonify({'message': f'Unexpected backend error: {err_msg}'}), 500
 
 @attendance_bp.route('/attendance/dates', methods=['GET'])
 @token_required
@@ -52,7 +295,7 @@ def get_attendance_dates(current_user):
         dates_list = sorted([d.strftime("%Y-%m-%d") for d in date_map.keys()], reverse=True)
         return jsonify({'dates': dates_list}), 200
     except Exception as e:
-        return jsonify({'message': f'Failed to retrieve dates: {str(e)}'}), 500
+        return handle_parse_exception(e)
 
 @attendance_bp.route('/attendance/session', methods=['GET'])
 @token_required
@@ -71,7 +314,39 @@ def get_attendance_sessions(current_user):
                 session_names.append(name)
         return jsonify({'sessions': session_names}), 200
     except Exception as e:
-        return jsonify({'message': f'Failed to retrieve sessions: {str(e)}'}), 500
+        return handle_parse_exception(e)
+
+@attendance_bp.route('/attendance/upload-data', methods=['GET'])
+@token_required
+def get_upload_data(current_user):
+    """Parses configured sources and returns raw JSON metadata for preview/generation in the frontend."""
+    try:
+        mft_students, marquee_students, date_map = fetch_and_parse_sheets(current_user)
+        
+        serialized_date_map = {}
+        for d_obj, sessions in date_map.items():
+            date_str = d_obj.strftime("%Y-%m-%d")
+            serialized_date_map[date_str] = [
+                {"colIdx": item[0], "sessionName": item[1]} for item in sessions
+            ]
+            
+        dates_list = sorted([d.strftime("%Y-%m-%d") for d in date_map.keys()], reverse=True)
+        
+        date_sessions = {}
+        for d_str, sessions in serialized_date_map.items():
+            date_sessions[d_str] = ["Combined (Any)", "Combined (All)"] + [
+                s["sessionName"] for s in sessions
+            ]
+            
+        return jsonify({
+            'dates': dates_list,
+            'dateSessions': date_sessions,
+            'mftStudents': mft_students,
+            'marqueeStudents': marquee_students,
+            'dateMap': serialized_date_map
+        }), 200
+    except Exception as e:
+        return handle_parse_exception(e)
 
 @attendance_bp.route('/attendance/generate', methods=['POST'])
 @token_required
@@ -141,7 +416,7 @@ def generate_attendance(current_user):
             }
         }), 200
     except Exception as e:
-        return jsonify({'message': f'Generation compilation failed: {str(e)}'}), 500
+        return handle_parse_exception(e)
 
 @attendance_bp.route('/attendance/save-run', methods=['POST'])
 @token_required

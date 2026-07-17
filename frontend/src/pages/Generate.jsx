@@ -26,49 +26,101 @@ export default function Generate() {
   const [records, setRecords] = useState([]);
   const [summary, setSummary] = useState(null);
 
-  // Fetch data source automatically on mount
+  // Configuration check states
+  const [studentConfigured, setStudentConfigured] = useState(true);
+  const [attendanceConfigured, setAttendanceConfigured] = useState(true);
+
+  // Check configs on mount and when user changes
   useEffect(() => {
+    const checkConfigs = async () => {
+      try {
+        const res = await apiClient.get('/settings');
+        const hasStudent = (res.data.student_source_type === 'upload' && res.data.student_uploaded_file) || (res.data.student_source_type === 'google_sheet' && res.data.student_excel_path);
+        const hasAttendance = (res.data.attendance_source_type === 'upload' && res.data.attendance_uploaded_file) || (res.data.attendance_source_type === 'google_sheet' && res.data.attendance_excel_path);
+        
+        setStudentConfigured(!!hasStudent);
+        setAttendanceConfigured(!!hasAttendance);
+        
+        if (hasStudent && hasAttendance) {
+          handleLoadDataSource();
+        }
+      } catch (err) {
+        console.error("Failed to check configuration settings:", err);
+      }
+    };
     if (user) {
-      handleLoadDataSource();
+      checkConfigs();
     }
   }, [user]);
 
-  // Fetch CSVs from Google Sheets automatically
+  // Fetch Excel/CSV data sources dynamically
   const handleLoadDataSource = async () => {
     setError('');
     setSuccess('');
     setSyncLoading(true);
 
+    // Clear parsing states before starting a new synchronization
+    setDates([]);
+    setDateMap({});
+    setDateSessions({});
+    setMftStudents([]);
+    setMarqueeStudents([]);
+    setSelectedDate('');
+    setSelectedSession('');
+    setRecords([]);
+    setSummary(null);
+
     try {
-      // 1. Load configuration URLs from settings API
+      // 1. Fetch current settings to verify source types
       const settingsRes = await apiClient.get('/settings');
+      const studentSourceType = settingsRes.data.student_source_type || 'google_sheet';
+      const attendanceSourceType = settingsRes.data.attendance_source_type || 'google_sheet';
       const studentUrl = settingsRes.data.student_excel_path;
       const attendanceUrl = settingsRes.data.attendance_excel_path;
+      const studentFile = settingsRes.data.student_uploaded_file;
+      const attendanceFile = settingsRes.data.attendance_uploaded_file;
 
-      if (!studentUrl || !attendanceUrl) {
-        throw new Error("Google Sheets CSV export URLs are not configured. Please set them in Settings.");
+      const hasStudent = (studentSourceType === 'upload' && studentFile) || (studentSourceType === 'google_sheet' && studentUrl?.trim());
+      const hasAttendance = (attendanceSourceType === 'upload' && attendanceFile) || (attendanceSourceType === 'google_sheet' && attendanceUrl?.trim());
+
+      setStudentConfigured(!!hasStudent);
+      setAttendanceConfigured(!!hasAttendance);
+
+      if (!hasStudent || !hasAttendance) {
+        throw new Error("Please configure both Student List and Attendance sources in Settings first.");
       }
 
-      // 2. Fetch sheet CSV data in browser
-      const [studentText, attendanceText] = await Promise.all([
-        fetch(studentUrl).then(res => {
-          if (!res.ok) throw new Error("Failed to download Student List CSV.");
-          return res.text();
-        }),
-        fetch(attendanceUrl).then(res => {
-          if (!res.ok) throw new Error("Failed to download Attendance Sheet CSV.");
-          return res.text();
-        })
-      ]);
+      let metadata;
 
-      // Log the downloaded CSV data in the browser console
-      console.log("Student List CSV Data:\n", studentText);
-      console.log("Attendance Logs CSV Data:\n", attendanceText);
+      // 2. Fetch and parse depending on type
+      if (studentSourceType === 'upload' || attendanceSourceType === 'upload') {
+        const res = await apiClient.get('/attendance/upload-data');
+        metadata = {
+          dates: res.data.dates,
+          dateSessions: res.data.dateSessions,
+          mftStudents: res.data.mftStudents,
+          marqueeStudents: res.data.marqueeStudents,
+          dateMap: res.data.dateMap
+        };
+      } else {
+        const [studentText, attendanceText] = await Promise.all([
+          fetch(studentUrl).then(res => {
+            if (!res.ok) throw new Error("Failed to download Student List CSV.");
+            return res.text();
+          }),
+          fetch(attendanceUrl).then(res => {
+            if (!res.ok) throw new Error("Failed to download Attendance Sheet CSV.");
+            return res.text();
+          })
+        ]);
 
-      // 3. Parse metadata
-      const metadata = parseCSVMetadata(studentText, attendanceText);
+        console.log("Student List CSV Data:\n", studentText);
+        console.log("Attendance Logs CSV Data:\n", attendanceText);
 
-      // Update state
+        metadata = parseCSVMetadata(studentText, attendanceText);
+      }
+
+      // Update state ONLY after successful parsing!
       setDates(metadata.dates);
       setDateSessions(metadata.dateSessions);
       setMftStudents(metadata.mftStudents);
@@ -81,9 +133,18 @@ export default function Generate() {
         setSelectedSession(initialSess ? initialSess[0] : '');
       }
 
-      setSuccess('Google Sheets CSV data downloaded and synchronized successfully.');
+      setSuccess('Spreadsheet synchronized successfully.');
     } catch (err) {
-      setError(err.message || 'Failed to download and parse Google Sheets CSV data.');
+      // Clear states if parsing failed
+      setDates([]);
+      setDateSessions({});
+      setMftStudents([]);
+      setMarqueeStudents([]);
+      setDateMap({});
+      setSelectedDate('');
+      setSelectedSession('');
+      
+      setError(err.response?.data?.message || err.message || 'Failed to download and parse spreadsheet data.');
     } finally {
       setSyncLoading(false);
     }
@@ -109,7 +170,6 @@ export default function Generate() {
     setPreviewLoading(true);
     
     try {
-      // 1. Process matches using Javascript CSV engine
       const { records: localRecords, summary: localSummary } = compileAttendancePreview(
         mftStudents,
         marqueeStudents,
@@ -121,7 +181,6 @@ export default function Generate() {
       setRecords(localRecords);
       setSummary(localSummary);
       
-      // 2. Save result run in SQLite
       await apiClient.post('/attendance/save-run', {
         date: selectedDate,
         records: localRecords,
@@ -180,6 +239,8 @@ export default function Generate() {
     }
   };
 
+  const isConfigured = studentConfigured && attendanceConfigured;
+
   return (
     <div className="flex-grow bg-bg-main text-text-primary p-6 md:p-12 relative overflow-hidden flex flex-col min-h-0 animate-fade-in">
       <div className="max-w-6xl mx-auto w-full relative z-10 space-y-8 flex flex-col flex-grow min-h-0 animate-slide-up">
@@ -194,9 +255,9 @@ export default function Generate() {
           </div>
           <button
             type="button"
-            disabled={syncLoading}
+            disabled={syncLoading || !isConfigured}
             onClick={handleLoadDataSource}
-            className="btn-base btn-primary px-6 h-[42px] cursor-pointer"
+            className="btn-base btn-primary px-6 h-[42px] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {syncLoading ? (
               <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
@@ -209,6 +270,24 @@ export default function Generate() {
           </button>
         </header>
 
+        {/* Global Configuration Warnings */}
+        {!studentConfigured && (
+          <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-sm flex-shrink-0 animate-fade-in flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-btn-absent flex-shrink-0">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+            </svg>
+            <span>No Student List source configured. Please set a Google Sheet URL or upload a file in Settings.</span>
+          </div>
+        )}
+        {!attendanceConfigured && (
+          <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-sm flex-shrink-0 animate-fade-in flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-btn-absent flex-shrink-0">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+            </svg>
+            <span>No Attendance source configured. Please set a Google Sheet URL or upload a file in Settings.</span>
+          </div>
+        )}
+
         {/* Action Form selectors */}
         <section className="card-premium p-6 shadow-sm flex-shrink-0">
           <form onSubmit={handleProcessPreview} className="flex flex-col sm:flex-row items-end gap-6">
@@ -220,13 +299,15 @@ export default function Generate() {
                 </label>
                 <select
                   id="select-date"
-                  disabled={dates.length === 0}
-                  className="w-full input-premium bg-white cursor-pointer disabled:opacity-50"
+                  disabled={!isConfigured || dates.length === 0}
+                  className="w-full input-premium bg-white cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   value={selectedDate}
                   onChange={(e) => handleDateChange(e.target.value)}
                 >
-                  {dates.length === 0 ? (
-                    <option>No Excel files uploaded.</option>
+                  {!isConfigured ? (
+                    <option>Sources not configured.</option>
+                  ) : dates.length === 0 ? (
+                    <option>Click "Load Data Source" to fetch dates.</option>
                   ) : (
                     dates.map((d, i) => (
                       <option key={i} value={d} className="bg-white">
@@ -243,13 +324,15 @@ export default function Generate() {
                 </label>
                 <select
                   id="select-session"
-                  disabled={dates.length === 0}
-                  className="w-full input-premium bg-white cursor-pointer disabled:opacity-50"
+                  disabled={!isConfigured || dates.length === 0}
+                  className="w-full input-premium bg-white cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   value={selectedSession}
                   onChange={(e) => setSelectedSession(e.target.value)}
                 >
-                  {dates.length === 0 ? (
-                    <option>No Excel files uploaded.</option>
+                  {!isConfigured ? (
+                    <option>Sources not configured.</option>
+                  ) : dates.length === 0 ? (
+                    <option>Click "Load Data Source" to fetch sessions.</option>
                   ) : (
                     (dateSessions[selectedDate] || []).map((s, i) => (
                       <option key={i} value={s} className="bg-white">
@@ -263,8 +346,8 @@ export default function Generate() {
 
             <button
               type="submit"
-              disabled={previewLoading || dates.length === 0}
-              className="btn-base btn-primary w-full sm:w-auto h-[42px] cursor-pointer"
+              disabled={previewLoading || dates.length === 0 || !isConfigured}
+              className="btn-base btn-primary w-full sm:w-auto h-[42px] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {previewLoading ? (
                 <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
@@ -277,12 +360,12 @@ export default function Generate() {
         </section>
 
         {/* Global Warnings/Errors */}
-        {dates.length === 0 && (
+        {isConfigured && dates.length === 0 && (
           <div className="p-4 bg-btn-warning/10 border border-btn-warning/20 rounded-xl text-amber-800 text-sm flex-shrink-0 animate-fade-in flex items-center gap-2">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-btn-warning">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
             </svg>
-            <span>No Google Sheets data loaded. Click "Load Data Source" above to synchronize.</span>
+            <span>No spreadsheet data loaded. Click "Load Data Source" above to synchronize.</span>
           </div>
         )}
         {error && (
